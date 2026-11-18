@@ -14,6 +14,80 @@ Source không chứa dữ liệu khách hàng hay tài khoản production cũ. W
 
 Hướng dẫn dùng VPS mới hoặc môi trường đã được quản trị viên kiểm tra. Nếu VPS đang chạy website khác trên cổng 80/443, cần tích hợp với reverse proxy đang có, không khởi động thêm Caddy chiếm cùng cổng.
 
+## 1a. VPS đã có Nginx và các website khác
+
+Với trường hợp này, chọn `compose.nginx.yaml`. File dùng lại cấu hình app,
+PostgreSQL và ClamAV từ `compose.yaml`, công bố app tại `127.0.0.1:3180`,
+để Nginx trên máy chủ tiếp nhận domain và HTTPS. PostgreSQL/scanner vẫn ở
+mạng Docker riêng; Caddy không được khởi động trong cấu hình này.
+
+Trước khi build, kiểm tra RAM khả dụng, dung lượng đĩa và cổng dự định dùng:
+
+```bash
+free -h
+df -h /
+sudo ss -ltnp '( sport = :3180 )'
+```
+
+Cổng 3180 cần trống. Nếu chọn cổng khác, cập nhật cả `SMEE_HTTP_PORT` và
+`proxy_pass` trong cấu hình Nginx. Build Next.js và ClamAV cần thêm RAM;
+trên VPS chạy nhiều ứng dụng, chuẩn bị đủ tài nguyên hoặc build image ở máy
+riêng trước khi triển khai. Swap có thể giảm rủi ro khi thiếu RAM tạm thời,
+nhưng không thay thế RAM cần thiết cho scanner.
+
+Tạo `.env` nếu chưa có (giữ file đã cấu hình ở các lần cập nhật), điền domain,
+email owner và mật khẩu database như mục 3. Bỏ dấu `#` ở hai dòng cuối:
+
+```dotenv
+COMPOSE_FILE=compose.nginx.yaml
+SMEE_HTTP_PORT=3180
+```
+
+Compose đọc `COMPOSE_FILE` từ `.env`, nên các lệnh `docker compose` và script
+backup/restore trong repo cùng sử dụng cấu hình Nginx này. Chạy từ thư mục
+repo và giữ lựa chọn đó trong `.env`; không ghép thêm file cấu hình Caddy.
+Các lệnh dưới đây dùng `sudo` vì tài khoản SSH có thể chưa thuộc nhóm Docker:
+
+```bash
+sudo docker compose config --quiet
+sudo docker compose config --services
+```
+
+Danh sách phải có đúng `postgres`, `clamav`, `app`. Build và khởi tạo theo
+mục 5, thêm `sudo` trước các lệnh Docker nếu cần. Kiểm tra app bằng:
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:3180/api/health
+```
+
+Khi app đã chạy, kiểm tra Nginx có virtual host cho domain CRM chưa. Nếu đã
+có, cập nhật đúng cấu hình của domain đó; tránh tạo hai `server_name` trùng
+nhau. Nếu chưa có, sao chép `deploy/nginx.conf.example` vào một file mới
+trong `/etc/nginx/sites-available/`, đổi `crm.example.com` thành domain CRM,
+rồi tạo symlink tương ứng trong `/etc/nginx/sites-enabled/`.
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Mẫu này là virtual host HTTP để khởi tạo. Dùng Certbot với Nginx để bổ sung
+chứng chỉ cho đúng domain; cài Certbot/plugin Nginx theo môi trường nếu chưa
+có. Ví dụ sau dùng domain minh họa, phải thay bằng domain của bạn:
+
+```bash
+sudo certbot --nginx -d crm.example.com --redirect
+```
+
+`APP_ORIGIN` vẫn phải là URL HTTPS chính xác. Nếu dùng Cloudflare, để riêng
+record CRM ở DNS only trong lần thiết lập chứng chỉ đầu. Sau khi HTTPS tại
+VPS hoạt động, có thể bật proxy với SSL/TLS Full (strict). Khi bật proxy,
+Nginx cần cấu hình real IP từ đúng dải IP Cloudflare tin cậy để rate limit
+phân biệt từng khách; không tin trực tiếp header IP do mọi người tự gửi.
+Hướng dẫn này chỉ thêm/cập nhật virtual host CRM, giữ cấu hình các website
+khác trên VPS. Xem [Compose extends](https://docs.docker.com/compose/how-tos/multiple-compose-files/extends/),
+[COMPOSE_FILE](https://docs.docker.com/compose/how-tos/environment-variables/envvars/)
+và [Nginx proxy headers](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header).
+
 ## 2. Cài Docker
 
 Làm theo [hướng dẫn Docker cho Ubuntu](https://docs.docker.com/engine/install/ubuntu/) để cài Docker Engine và Compose plugin từ apt repository chính thức. Không cần cài Node.js trực tiếp trên VPS nếu dùng Docker.

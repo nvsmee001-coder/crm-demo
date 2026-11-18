@@ -1,0 +1,27 @@
+# Bootstrap HTTP virtual host. Replace the hostname and confirm the upstream port.
+# Certbot's Nginx plugin can add the certificate and HTTPS redirect after DNS is ready.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name crm.example.com;
+
+    client_max_body_size 11m;
+    client_body_timeout 30s;
+
+    location / {
+        proxy_pass http://127.0.0.1:3180;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Forwarded "";
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_buffering off;
+        proxy_cache off;
+    }
+}
