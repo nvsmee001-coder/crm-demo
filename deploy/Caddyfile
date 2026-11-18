@@ -1,0 +1,35 @@
+{
+  servers {
+    timeouts {
+      read_header 10s
+      read_body 30s
+      write 2m
+      idle 2m
+    }
+  }
+}
+
+{$APP_DOMAIN} {
+  request_body {
+    max_size 11MB
+  }
+  header {
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "no-referrer"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+  reverse_proxy app:3000 {
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-Proto https
+    header_up -oai-authenticated-*
+    header_up -X-User-*
+    transport http {
+      dial_timeout 5s
+      response_header_timeout 60s
+    }
+  }
+}

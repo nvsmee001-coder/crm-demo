@@ -1,0 +1,102 @@
+/* SMEE welcome · a focused sign-in surface in the red / white identity. */
+.smee-welcome {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 26px;
+  padding: 48px 32px 28px;
+  color: var(--ink, #25252b);
+  background:
+    radial-gradient(ellipse at 8% 10%, #fff0ef 0, transparent 40%),
+    radial-gradient(ellipse at 95% 88%, #ffe8e544 0, transparent 45%),
+    #f7f8fa;
+}
+.smee-welcome-card {
+  width: min(1080px, 100%);
+  display: grid;
+  grid-template-columns: 1.08fr 1fr;
+  border: 1px solid #fff;
+  border-radius: 30px;
+  background: #ffffffed;
+  box-shadow: 0 28px 80px #30292b0c, 0 2px 5px #30292b03;
+  overflow: hidden;
+}
+.smee-welcome-copy { padding: 48px 50px 42px; min-width: 0; }
+.smee-welcome-brand { display: flex; align-items: center; margin-bottom: 42px; }
+.smee-welcome-kicker { display: inline-flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 600; color: var(--brand-strong, #b71f1a); background: #fff1f0; border: 1px solid #f9dcd9; border-radius: 100px; padding: 7px 11px; margin-bottom: 21px; letter-spacing: 1.1px; }
+.smee-welcome-copy h1 { font-size: clamp(38px, 4.3vw, 52px); font-weight: 700; letter-spacing: -2.2px; line-height: 1.25; }
+.smee-welcome-copy h1 span { color: var(--brand, #e92b22); }
+.smee-welcome-intro { font-size: 14px; line-height: 1.9; color: var(--muted, #73737d); margin-top: 20px; max-width: 390px; }
+.smee-welcome-features { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 23px; }
+.smee-welcome-features > span { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: #62626b; border: 1px solid #ececef; background: #fafafb; border-radius: 9px; padding: 8px 10px; }
+.smee-welcome-features svg { color: #b44640; }
+.smee-welcome-login { display: flex; align-items: center; justify-content: center; gap: 14px; width: 100%; min-height: 54px; padding: 15px 20px; margin-top: 32px; border-radius: 16px; background: linear-gradient(155deg, #f25a51, #de2c23 52%, #c7211b); color: #fff; border: 1px solid #dc3b33; font-weight: 600; font-size: 13px; box-shadow: inset 0 1px 2px #ffffff83, inset 0 -2px 4px #8d191423, 0 8px 22px #c72d2224; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); transition: transform .18s ease, box-shadow .18s ease; }
+.smee-welcome-login:hover { transform: translateY(-2px); box-shadow: inset 0 1px 2px #fff9, 0 12px 28px #c72d2233; }
+.smee-welcome-login:active { transform: translateY(0) scale(.985); }
+.smee-welcome-login:focus-visible { outline: 3px solid var(--brand-strong, #b71f1a); outline-offset: 5px; }
+.smee-welcome-hint { margin-top: 14px; font-size: 10px; line-height: 1.8; text-align: center; color: var(--muted, #73737d); }
+.smee-welcome-art { position: relative; overflow: hidden; min-height: 620px; background: radial-gradient(ellipse at 80% 5%, #fff7f5 0, transparent 58%), linear-gradient(150deg, #fff0ed, #fce3e0); border: 1px solid #fbe4e1; border-radius: 24px; margin: 10px 10px 10px 0; isolation: isolate; }
+.smee-welcome-art::before { content: ''; position: absolute; inset: 0; background-image: linear-gradient(#d73e2d06 1px, transparent 1px), linear-gradient(90deg, #d73e2d06 1px, transparent 1px); background-size: 32px 32px; z-index: -1; }
+.smee-welcome-art-caption { position: absolute; top: 35px; left: 32px; font-size: 9px; letter-spacing: 1.6px; color: #9b625b; font-weight: 600; }
+.smee-welcome-orbit { position: absolute; left: 50%; top: 46%; border: 1px solid #ffffffce; border-radius: 50%; z-index: -1; }
+.smee-welcome-orbit.orbit-one { width: 405px; height: 405px; transform: translate(-50%, -50%); }
+.smee-welcome-orbit.orbit-two { width: 515px; height: 515px; transform: translate(-50%, -50%); }
+.smee-welcome-orb { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%) rotate(-13deg); display: grid; place-items: center; }
+.smee-welcome-float { position: absolute; border: 1px solid #ffffffef; background: linear-gradient(125deg, #fffffff2, #ffffffb0); border-radius: 18px; box-shadow: inset 0 1px 1px #fff, 0 15px 35px #89403912; backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+.smee-welcome-float.float-contact { display: flex; align-items: center; gap: 11px; left: 24px; top: 23%; width: 286px; padding: 16px; transform: rotate(-4deg); }
+.smee-welcome-mini-avatar { width: 42px; height: 42px; display: grid; place-items: center; flex-shrink: 0; border-radius: 13px; background: #fff0ee; color: #bf3028; border: 1px solid #f8d7d2; }
+.smee-welcome-float strong { font-size: 12px; line-height: 1.65; font-weight: 600; }
+.smee-welcome-float small { display: block; font-size: 10px; color: #787078; line-height: 1.8; margin-top: 2px; }
+.smee-welcome-check { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; color: #b4352d; background: #ffeae6; border-radius: 50%; margin-left: auto; }
+.smee-welcome-float.float-todo { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; width: 190px; padding: 19px; right: 24px; bottom: 19%; transform: rotate(6deg); }
+.smee-welcome-mini-icon { display: grid; place-items: center; width: 37px; height: 37px; border-radius: 12px; color: #b4352d; background: #fff0ee; }
+.smee-welcome-todo-line { width: 100%; display: flex; gap: 4px; margin-top: 2px; }
+.smee-welcome-todo-line i { width: 33%; height: 5px; background: #ef8b80; border-radius: 5px; }
+.smee-welcome-todo-line i:nth-child(2) { background: #f2b4ab; }
+.smee-welcome-todo-line i:last-child { background: #f0e5e3; }
+.smee-welcome-spark { position: absolute; color: #d95449; }
+.smee-welcome-spark.spark-one { right: 39px; top: 15%; transform: rotate(9deg); }
+.smee-welcome-spark.spark-two { font-size: 44px; color: #e57266; left: 43px; bottom: 27%; transform: rotate(15deg); }
+.smee-welcome-art-footer { display: flex; align-items: center; position: absolute; bottom: 34px; left: 32px; right: 25px; }
+.smee-welcome-art-footer > span { height: 22px; width: 22px; background: #e1665b; border: 2px solid #fff9; border-radius: 50%; }
+.smee-welcome-art-footer > span:nth-child(2) { background: #edb1aa; margin-left: -7px; }
+.smee-welcome-art-footer > span:nth-child(3) { background: #fff9; margin-left: -7px; }
+.smee-welcome-art-footer small { margin-left: 10px; color: #956962; font-size: 10px; }
+.smee-welcome-footer { display: flex; align-items: center; gap: 12px; font-size: 10px; color: #85858f; }
+.smee-welcome-footer > span { color: #c3c3cb; }
+@media (max-width: 900px) {
+  .smee-welcome { padding: 30px 20px 24px; }
+  .smee-welcome-copy { padding: 36px 30px; }
+  .smee-welcome-card { grid-template-columns: 1.1fr 1fr; border-radius: 26px; }
+  .smee-welcome-art { border-radius: 20px; min-height: 600px; }
+  .smee-welcome-brand { margin-bottom: 34px; }
+  .smee-welcome-copy h1 { font-size: 42px; }
+  .smee-welcome-float.float-contact { width: 245px; left: 12px; padding: 13px; gap: 8px; }
+  .smee-welcome-float.float-todo { right: 14px; width: 166px; }
+  .smee-welcome-art-caption { left: 24px; font-size: 8px; letter-spacing: 1px; }
+  .smee-welcome-art-footer { left: 24px; }
+  .smee-welcome-art-footer small { max-width: 135px; line-height: 1.6; }
+}
+@media (max-width: 650px) {
+  .smee-welcome { padding: 22px 16px; gap: 22px; }
+  .smee-welcome-card { max-width: 460px; grid-template-columns: 1fr; border-radius: 26px; }
+  .smee-welcome-copy { padding: 30px 26px 32px; }
+  .smee-welcome-brand { margin-bottom: 30px; }
+  .smee-welcome-kicker { font-size: 9px; margin-bottom: 18px; }
+  .smee-welcome-copy h1 { font-size: 42px; letter-spacing: -1.8px; }
+  .smee-welcome-intro { font-size: 13px; margin-top: 20px; }
+  .smee-welcome-features { gap: 7px; margin-top: 18px; }
+  .smee-welcome-login { margin-top: 27px; font-size: 13px; padding-inline: 15px; gap: 10px; }
+  .smee-welcome-art { display: none; }
+  .smee-welcome-footer { font-size: 10px; gap: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .smee-welcome-login { transition: none; }
+  .smee-welcome-login:hover, .smee-welcome-login:active { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .smee-welcome-card, .smee-welcome-float { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .smee-welcome-login { color: #fff; background: #b71f1a; backdrop-filter: none; -webkit-backdrop-filter: none; }
+}

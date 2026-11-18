@@ -1,0 +1,50 @@
+{
+  "name": "smee-crm-vps",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build --webpack && node scripts/prepare-standalone.mjs",
+    "start": "node --env-file-if-exists=.env .next/standalone/server.js",
+    "test": "node scripts/test-crm.mjs && node scripts/test-excel.mjs",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
+    "owner:create": "node --env-file-if-exists=.env --import tsx scripts/create-owner.ts",
+    "owner:reset": "node --env-file-if-exists=.env --import tsx scripts/reset-owner-password.ts",
+    "test:security": "node --import tsx --test tests/http-security.test.ts tests/auth-crypto.test.ts tests/file-security.test.ts tests/deployment-config.test.mjs",
+    "test:database": "node --import tsx --test tests/postgres-store.test.ts",
+    "test:auth": "node --import tsx --test tests/auth-store.test.ts",
+    "test:api": "node scripts/test-api.mjs",
+    "security:audit": "npm audit --audit-level=high"
+  },
+  "dependencies": {
+    "next": "16.4.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "lucide-react": "1.75.0",
+    "exceljs": "4.4.0",
+    "pg": "8.23.1",
+    "file-type": "22.3.0",
+    "tsx": "4.23.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.5",
+    "tailwindcss": "4.3.5",
+    "tw-animate-css": "1.4.0",
+    "typescript": "5.9.3",
+    "@types/node": "22.19.19",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.2.3",
+    "@types/pg": "8.23.1",
+    "@electric-sql/pglite": "0.5.16",
+    "@electric-sql/pglite-socket": "0.2.19"
+  },
+  "overrides": {
+    "uuid": "11.1.1",
+    "brace-expansion": "1.1.22"
+  }
+}

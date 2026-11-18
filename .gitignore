@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Generated builds and test output
+.next/
+/out/
+/dist/
+coverage/
+.test-output/
+*.tsbuildinfo
+
+# Local configuration and private keys
+.env
+.env.*
+!/.env.example
+.dev.vars*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Private VPS runtime data
+/data/
+/uploads/
+/backups/
+
+# Database copies and backup archives (keep migrations/*.sql tracked)
+*.dump
+*.sql.gz
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.bak
+*.zip
+*.tar.gz
+
+# Logs and OS metadata
+*.log
+.DS_Store

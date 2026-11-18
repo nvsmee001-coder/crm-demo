@@ -1,0 +1,23 @@
+/* Original SMEE artwork, shared across every company identity surface. */
+.smee-brand-logo{display:block;flex-shrink:0;max-width:100%;height:auto;overflow:hidden}
+.brand.smee-brand-lockup{display:flex;flex-direction:column;align-items:center;gap:9px;width:100%;padding:0 5px 22px}
+.brand.smee-brand-lockup>.smee-brand-logo{width:142px;height:auto}
+.smee-brand-caption{font-size:9px;line-height:1.5;letter-spacing:1.7px;color:var(--muted);font-weight:500;text-align:center}
+.workspace-logo.smee-workspace-symbol{background:var(--brand-soft);border-color:#f5d4d0;width:32px;height:32px;padding:5px;border-radius:10px}
+.workspace-logo.smee-workspace-symbol>.smee-brand-logo{width:100%;height:auto}
+.loading-inner .brand.smee-brand-lockup{padding-bottom:22px}
+.loading-inner .brand.smee-brand-lockup>.smee-brand-logo{width:186px}
+.employee-brand.smee-employee-brand{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0}
+.employee-brand.smee-employee-brand>.smee-brand-logo{width:126px;height:auto}
+.employee-brand.smee-employee-brand>small{font-size:9px;line-height:1.4;font-weight:500;letter-spacing:1.45px;color:var(--muted)}
+.employee-topbar:has(.smee-employee-brand){min-height:101px}
+.smee-welcome-brand{margin-bottom:36px;min-height:78px}
+.smee-welcome-brand>.smee-brand-logo{width:185px;height:auto}
+.smee-welcome-orb{width:290px;height:210px;border-radius:42px;background:linear-gradient(145deg,#ffffffdd,#fff6f6ad);border:1px solid #ffffffed;box-shadow:inset 2px 3px 5px #fff,inset -2px -3px 8px #e7d6d439,0 25px 55px #b8262020;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.smee-welcome-orb>.smee-brand-logo{width:236px;height:auto;transform:rotate(13deg);filter:drop-shadow(0 2px 1px #e9292010)}
+.quote-brand-logo{width:140px;height:auto;max-width:100%}
+@media(max-width:1250px){.brand.smee-brand-lockup>.smee-brand-logo{width:140px}.smee-brand-caption{font-size:8px;letter-spacing:1.4px}}
+@media(max-width:900px){.smee-welcome-orb{width:238px;height:185px}.smee-welcome-orb>.smee-brand-logo{width:194px}}
+@media(max-width:650px){.brand.smee-brand-lockup>.smee-brand-logo{width:150px}.smee-brand-caption{font-size:9px}.employee-brand.smee-employee-brand>.smee-brand-logo{width:99px}.employee-brand.smee-employee-brand>small{font-size:8px;letter-spacing:.9px}.employee-topbar:has(.smee-employee-brand){min-height:87px}.smee-welcome-brand{margin-bottom:30px;min-height:68px}.smee-welcome-brand>.smee-brand-logo{width:158px}}
+@media(prefers-reduced-transparency:reduce){.smee-welcome-orb{background:#fff;backdrop-filter:none;-webkit-backdrop-filter:none}}
+@media print{.smee-brand-logo{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
