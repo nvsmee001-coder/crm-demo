@@ -175,6 +175,17 @@ Lệnh preflight ở trên kiểm tra cấu hình trước lần khởi tạo Po
 
 Lệnh cuối chạy migration và CLI tạo chủ sở hữu. Nhập thông tin theo nhắc trên terminal; mật khẩu được nhập ẩn, không truyền qua tham số lệnh. Dùng mật khẩu mạnh, tối thiểu 12 ký tự. Không có tài khoản/mật khẩu mặc định và không có đăng ký công khai.
 
+CLI hỏi lần lượt email, tên hiển thị, mật khẩu và xác nhận mật khẩu. Ở dòng
+email, nhấn Enter để dùng địa chỉ `SMEE_OWNER_EMAIL` hiển thị trong ngoặc
+vuông. Hai trường đầu hiển thị khi nhập; hai trường mật khẩu không hiện ký
+tự. Trong container, biến cấu hình đã được Compose truyền vào. Thông báo
+`.env not found. Continuing without it.` từ Node không có nghĩa là thiếu cấu
+hình; có thể chạy CLI trực tiếp để bỏ thông báo này:
+
+```bash
+docker compose run --rm app node --import tsx scripts/create-owner.ts
+```
+
 Scanner có thể cần vài phút để nạp/cập nhật mẫu nhận diện ở lần chạy đầu. Nếu `--wait` hết thời gian, kiểm tra `docker compose logs --tail=100 clamav` và tài nguyên máy rồi chạy lại; không tắt scanner để vượt qua lỗi.
 
 Sau khi tạo owner:

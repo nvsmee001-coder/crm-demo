@@ -12,9 +12,14 @@ export async function readAuthInput(reset=false):Promise<{email?:string;displayN
  const output=new Writable({write(chunk,encoding,callback){if(!muted)process.stdout.write(chunk,encoding as BufferEncoding);callback();}});
  const rl=createInterface({input:process.stdin,output,terminal:true});
  rl.on('SIGINT',()=>{process.stdout.write('\nĐã hủy.\n');rl.close();process.exit(130)});
- async function ask(label:string,secret=false){process.stdout.write(label);muted=secret;try{return await rl.question('')}finally{muted=false;if(secret)process.stdout.write('\n')}}
+ async function ask(label:string,secret=false){
+  if(!secret)return rl.question(label);
+  process.stdout.write(label);muted=true;
+  try{return await rl.question('')}finally{muted=false;process.stdout.write('\n')}
+ }
  try{
-  const email=reset?undefined:await ask('Email chủ sở hữu (trùng SMEE_OWNER_EMAIL): ');
+  const configuredEmail=process.env.SMEE_OWNER_EMAIL?.trim().toLowerCase();
+  const email=reset?undefined:(await ask(configuredEmail?`Email chủ sở hữu [${configuredEmail}] (Enter để dùng): `:'Email chủ sở hữu (trùng SMEE_OWNER_EMAIL): ')).trim() || configuredEmail;
   const displayName=reset?undefined:await ask('Tên hiển thị: ');
   const password=await ask('Mật khẩu mới (12–128 ký tự, không hiển thị): ',true);
   const confirm=await ask('Nhập lại mật khẩu: ',true);
