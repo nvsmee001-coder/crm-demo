@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {authorizeCommand,canReadCustomer,projectWorkspace,eligibleTelesalesAccounts} from '../lib/crm-access.js';
 import {applyCommand,CRMError,normalizeWorkspace} from '../lib/crm-engine.js';
-import type {AccessContext,Command,Workspace} from '../lib/crm-types.js';
+import type {AccessContext,CollectionAction,Command,StaffRole,Workspace} from '../lib/crm-types.js';
 import {COLLECTION_ACTIONS} from '../lib/crm-types.js';
 
 function context(role:AccessContext['role'],memberId='a'):AccessContext{return{role,memberId:role==='owner'?undefined:memberId,userId:`uid-${memberId}`,email:`${memberId}@example.test`,name:memberId,ownerId:'uid-owner',ownerEmail:'owner@example.test',accountId:`account-${memberId}`,accountVersion:1};}
@@ -24,18 +24,28 @@ function fixture():Workspace{
 function denied(fn:()=>unknown){assert.throws(fn,(error:unknown)=>error instanceof CRMError && error.status===403);}
 function auth(w:Workspace,ctx:AccessContext,command:Partial<Command>){authorizeCommand(w,{action:'log_contact',expectedRevision:0,...command} as Command,ctx);}
 
-test('only owner writes collection records, managers can review and staff cannot read receipt activity', () => {
+test('receipt write permissions separate collection staff, owner approvals and contract management', () => {
   const w=fixture();
   const projectId=w.projects[0].id;
+  const permitted:Record<StaffRole,readonly CollectionAction[]> = {
+    manager:['request_legacy_contract_change','review_legacy_contract_change'],
+    finance:['record_project_receipt','request_receipt_correction'],
+    account:[],telesales:[],delivery:[],
+  };
   for(const action of COLLECTION_ACTIONS) {
     const command={action,id:projectId,data:{openingAmount:0},expectedRevision:0};
     assert.doesNotThrow(()=>authorizeCommand(w,command,context('owner')));
-    for(const role of ['manager','account','telesales'] as const) {
+    for(const role of ['manager','finance','account','telesales','delivery'] as const) {
+      if (permitted[role].includes(action)) {
+        assert.doesNotThrow(()=>authorizeCommand(w,command,context(role)));
+        continue;
+      }
       denied(()=>authorizeCommand(w,command,context(role)));
       denied(()=>applyCommand(w,command,'Nhân viên',undefined,context(role)));
     }
   }
   const withLedger=applyCommand(w,{action:'open_project_ledger',id:projectId,data:{openingAmount:1200},expectedRevision:0},'Chủ',undefined,context('owner'));
+  denied(()=>projectWorkspace(withLedger,context('finance')));
   assert.deepEqual(projectWorkspace(withLedger,context('manager')).projects[0].ledger,withLedger.projects[0].ledger);
   for(const role of ['account','telesales'] as const) {
     const projected=projectWorkspace(withLedger,context(role));

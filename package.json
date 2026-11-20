@@ -14,9 +14,11 @@
     "typecheck": "tsc --noEmit",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
     "owner:create": "node --env-file-if-exists=.env --import tsx scripts/create-owner.ts",
+    "owner:mfa-reset": "node --env-file-if-exists=.env --import tsx scripts/reset-owner-mfa.ts",
     "owner:reset": "node --env-file-if-exists=.env --import tsx scripts/reset-owner-password.ts",
     "test:security": "node --import tsx --test tests/http-security.test.ts tests/auth-crypto.test.ts tests/file-security.test.ts tests/deployment-config.test.mjs",
     "test:database": "node --import tsx --test tests/postgres-store.test.ts",
+    "test:migration": "node --import tsx --test tests/workspace-migration.test.ts",
     "test:auth": "node --import tsx --test tests/auth-store.test.ts",
     "test:api": "node scripts/test-api.mjs",
     "security:audit": "npm audit --audit-level=high"

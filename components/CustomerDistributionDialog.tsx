@@ -3,22 +3,24 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { AlertCircle, ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, Headphones, ListChecks, Shuffle, Users, X } from 'lucide-react';
 import { normalizePhone } from '../lib/crm-engine';
-import type { Command, Customer } from '../lib/crm-types';
+import type { EmployeeMutation } from './ProspectEditor';
+import type { Customer } from '../lib/crm-types';
 
 type Assignee = { id: string; name: string };
 type Props = {
   customers: Customer[];
+  revision: number;
   assignees: Assignee[];
   busy: boolean;
   onClose: () => void;
-  onMutate: (command: Omit<Command, 'expectedRevision'>) => Promise<boolean | undefined>;
+  onMutate: EmployeeMutation;
   onDone: () => void;
 };
 const currentDate = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
 function validPhone(value: string) { try { return !!normalizePhone(value); } catch { return false; } }
 const initials = (value: string) => value.split(' ').filter(Boolean).slice(-2).map(part => part[0]).join('').toUpperCase();
 
-export default function CustomerDistributionDialog({ customers, assignees, busy, onClose, onMutate, onDone }: Props) {
+export default function CustomerDistributionDialog({ customers, revision, assignees, busy, onClose, onMutate, onDone }: Props) {
   const [selected, setSelected] = useState<string[]>([]);
   const [method, setMethod] = useState<'equal' | 'manual'>('equal');
   const [quotas, setQuotas] = useState<Record<string, string>>({});
@@ -32,6 +34,7 @@ export default function CustomerDistributionDialog({ customers, assignees, busy,
   const dialog = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
   const locked = useRef(false);
+  const previewRevision = useRef(revision);
   close.current = onClose;
   locked.current = busy || submitting;
   const disabled = busy || submitting;
@@ -84,15 +87,15 @@ export default function CustomerDistributionDialog({ customers, assignees, busy,
   }
   function showPreview(event: FormEvent) {
     event.preventDefault(); if (disabled) return;
-    const problem = validation(); setError(problem); if (!problem) { setReviewing(true); dialog.current?.scrollTo({ top: 0, behavior: 'instant' }); }
+    const problem = validation(); setError(problem); if (!problem) { previewRevision.current=revision; setReviewing(true); dialog.current?.scrollTo({ top: 0, behavior: 'instant' }); }
   }
   async function submit() {
     if (locked.current) return;
     const problem = validation(); setError(problem); if (problem) { setReviewing(false); return; }
     locked.current = true; setSubmitting(true);
     try {
-      const ok = await onMutate({ action: 'distribute_customers', data: { assignments: assignments.filter(assignment => assignment.ids.length > 0), note: note.trim(), nextFollowUp, allowReassign } });
-      if (ok) onDone(); else setError('Chưa phân chia được khách hàng. Kiểm tra thông báo, tải lại dữ liệu nếu có thay đổi và thử lại.');
+      const ok = await onMutate({ action: 'distribute_customers', data: { assignments: assignments.filter(assignment => assignment.ids.length > 0), note: note.trim(), nextFollowUp, allowReassign } }, {expectedRevision:previewRevision.current,onConflict:()=>setReviewing(false),onError:setError});
+      if (ok) onDone();
     } catch { setError('Chưa phân chia được khách hàng. Vui lòng kiểm tra kết nối và thử lại.'); }
     finally { setSubmitting(false); locked.current = false; }
   }
@@ -130,7 +133,7 @@ export default function CustomerDistributionDialog({ customers, assignees, busy,
           <div className="distribution-preview-totals">{assignments.map(assignment => <div key={assignment.owner}><span className="distribution-avatar">{initials(recipientName(assignment.owner))}</span><span>{recipientName(assignment.owner)}<b>{assignment.ids.length} khách</b></span></div>)}</div>
           <div className="distribution-review-note"><p><strong>Ngày cần gọi:</strong> {new Date(nextFollowUp + 'T12:00:00').toLocaleDateString('vi-VN')}</p><p><strong>Bàn giao:</strong> {note.trim()}</p>{!allowReassign && previouslyAssigned.length > 0 && <p>{previouslyAssigned.length} khách đã có telesales được giữ nguyên.</p>}{invalid.length > 0 && <p>Bỏ qua {invalid.length} khách chưa có số điện thoại hợp lệ.</p>}{allowReassign && previouslyAssigned.length > 0 && <p className="distribution-reassign-warning">Bao gồm phân công lại {targets.filter(customer => !!customer.telesalesOwner).length} khách đã được giao trước đó.</p>}</div>
           <div className="distribution-preview-table"><table><thead><tr><th>Khách hàng</th><th>Số điện thoại</th><th>Telesales nhận</th></tr></thead><tbody>{targets.map(customer => <tr key={customer.id}><td><strong>{customer.name}</strong>{customer.telesalesOwner && <small>Phân công lại</small>}</td><td>{normalizePhone(customer.phone)}</td><td>{recipientName(assignedTo.get(customer.id) || '')}</td></tr>)}</tbody></table></div>
-          <p className="distribution-hint">Người phụ trách account và lịch sử chăm sóc của khách được giữ nguyên. Nhân viên telesales xem khách theo phân công mới sau khi lưu.</p>
+          <p className="distribution-hint">Việc đang chờ của telesales cũ chuyển cho người nhận mới. Account và lịch sử trao đổi của khách được giữ nguyên.</p>
         </>}
       </form>
       <footer className="distribution-footer"><p>{reviewing ? 'Chỉ lưu khi bạn xác nhận phân chia.' : 'Xem trước danh sách người nhận trước khi lưu.'}</p><div>{reviewing ? <><button type="button" className="btn" disabled={disabled} onClick={() => { setReviewing(false); setError(''); }}><ArrowLeft size={14}/>Điều chỉnh</button><button type="button" className="btn primary" disabled={disabled || !targets.length} onClick={submit}>{disabled ? 'Đang phân chia…' : `Xác nhận chia ${targets.length} khách`}<Check size={15}/></button></> : <><button type="button" className="btn" disabled={disabled} onClick={onClose}>Hủy</button><button type="submit" form="customer-distribution-form" className="btn primary" disabled={disabled || !recipients.length || !targets.length}>Xem trước phân chia<ArrowRight size={15}/></button></>}</div></footer>

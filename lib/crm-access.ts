@@ -1,6 +1,8 @@
-import type { AccessContext, Command, Customer, Workspace } from './crm-types.js';
+import type { AccessContext, Command, Customer, Deal, Workspace } from './crm-types.js';
 import { CRMError, prospectFields, requireProspectMember } from './crm-engine.js';
-import { isCollectionAction } from './project-collections.js';
+import { canWriteCollections, isCollectionAction } from './project-collections.js';
+import { isSalesAction } from './sales-workflow.js';
+import { isSalesHandoffAction } from './sales-handoff.js';
 
 const staffRoles=new Set(['account','telesales']);
 function denied():never{throw new CRMError('Bạn không có quyền thực hiện thao tác này.',403);}
@@ -10,8 +12,52 @@ export function canReadCustomer(customer:Customer,access:AccessContext):boolean{
   return access.role==='telesales'?customer.telesalesOwner===access.memberId:access.role==='account' && customer.owner===access.memberId;
 }
 const editableCustomerFields=new Set([...prospectFields,'jobTitle','address','website','background','favorite','tags','additionalPhones','additionalEmails','socialLinks']);
+const accountDealFields = new Set(['name','customerId','serviceId','value','stage','closeDate','nextAction','scope','probability','description','lossReason']);
+
+function ownsDeal(workspace: Workspace, deal: Deal, access: AccessContext) {
+  if (!access.memberId) return false;
+  const owner = workspace.team.find(member => member.id === deal.owner) ?? workspace.team.find(member => member.name === deal.owner);
+  return owner?.id === access.memberId && workspace.customers.some(customer => customer.id === deal.customerId && canReadCustomer(customer, access));
+}
+
 export function authorizeCommand(full:Workspace,command:Command,access:AccessContext):void{
-  if(isCollectionAction(command.action) && access.role!=='owner')denied();
+  if (isSalesHandoffAction(command.action)) {
+    if (command.collection !== undefined) denied();
+    const customer = full.customers.find(item=>item.id === command.id);
+    if (!customer) denied();
+    const handoff = customer.salesHandoff;
+    if (command.action === 'respond_sales_handoff') {
+      if (access.role !== 'account' || !access.memberId || handoff?.toMemberId !== access.memberId) denied();
+      return;
+    }
+    if (access.role === 'owner' || access.role === 'manager') return;
+    if (access.role !== 'telesales' || !canReadCustomer(customer,access) ||
+      (command.action === 'cancel_sales_handoff' && handoff?.fromMemberId !== access.memberId)) denied();
+    return;
+  }
+  if (isSalesAction(command.action)) {
+    if (command.collection !== undefined) denied();
+    if (access.role === 'owner' || access.role === 'manager') return;
+    const deal = full.deals.find(item => item.id === command.id);
+    if (access.role !== 'account' || command.action.startsWith('review_') || !deal || !ownsDeal(full,deal,access)) denied();
+    return;
+  }
+  if (command.collection === 'deals' && access.role === 'account') {
+    const data = command.data ?? {};
+    if (Object.keys(data).some(key => !accountDealFields.has(key))) denied();
+    if (command.action === 'create') {
+      if (command.id !== undefined || !full.customers.some(customer => customer.id === data.customerId && canReadCustomer(customer,access)) || !full.services.some(service=>service.id === data.serviceId && service.active)) denied();
+      return;
+    }
+    const deal = full.deals.find(item => item.id === command.id);
+    if (command.action !== 'update' || !deal || !ownsDeal(full,deal,access) || (Object.hasOwn(data,'customerId') && data.customerId !== deal.customerId)) denied();
+    if (Object.hasOwn(data,'serviceId') && data.serviceId !== deal.serviceId && !full.services.some(service=>service.id === data.serviceId && service.active)) denied();
+    return;
+  }
+  if(isCollectionAction(command.action)) {
+    if (command.collection !== undefined || !canWriteCollections(command.action,access.role)) denied();
+    return;
+  }
   if(access.role==='manager' && command.action==='update' && command.collection==='projects' && command.data && 'budget' in command.data) {
     const project=full.projects.find(record=>record.id===command.id);
     if(project?.ledger && command.data.budget !== project.budget)denied();
@@ -59,9 +105,22 @@ export function projectWorkspace(full:Workspace,access:AccessContext):Workspace{
   if(!staffRoles.has(access.role) || !access.memberId)denied();
   result.customers=result.customers.filter(customer=>canReadCustomer(customer,access));
   const visibleIds=new Set(result.customers.map(customer=>customer.id));
-  for(const customer of result.customers)customer.relationships=(customer.relationships || []).filter(relationship=>visibleIds.has(relationship.customerId));
-  result.deals=result.deals.filter(deal=>visibleIds.has(deal.customerId)).map(deal=>{const safe={...deal};delete safe.projectId;return safe;});
-  const serviceIds=new Set(result.deals.map(deal=>deal.serviceId));result.services=result.services.filter(service=>serviceIds.has(service.id));
+  for(const customer of result.customers) {
+    delete customer.salesHandoff;
+    customer.relationships=(customer.relationships || []).filter(relationship=>visibleIds.has(relationship.customerId));
+  }
+  result.deals=result.deals.filter(deal=>visibleIds.has(deal.customerId)).map(deal=>{
+    const safe={...deal};
+    delete safe.projectId;
+    if (access.role !== 'account' || !ownsDeal(full,deal,access)) {
+      delete safe.quotes;
+      delete safe.winRequests;
+      delete safe.contractChanges;
+    }
+    return safe;
+  });
+  const serviceIds=new Set(result.deals.map(deal=>deal.serviceId));
+  result.services=result.services.filter(service=>serviceIds.has(service.id) || (access.role==='account' && service.active));
   const entityIds=new Set([...visibleIds,...result.deals.map(deal=>deal.id)]);
   result.activities=result.activities.filter(activity=>activity.entityId && entityIds.has(activity.entityId)).map(activity=>{
     const safe={...activity};delete safe.details;return safe;

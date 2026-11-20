@@ -43,6 +43,9 @@ services:
       APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env}
       APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN in .env}
       SMEE_OWNER_EMAIL: ${SMEE_OWNER_EMAIL:?Set SMEE_OWNER_EMAIL in .env}
+      SMEE_ENABLE_DEMO: ${SMEE_ENABLE_DEMO:-false}
+      SMEE_REQUIRE_MFA: ${SMEE_REQUIRE_MFA:-false}
+      SMEE_MFA_KEY: ${SMEE_MFA_KEY:-}
       DATABASE_URL: postgresql://smee:${POSTGRES_PASSWORD}@postgres:5432/smee
       UPLOAD_DIR: /app/data/uploads
       TRUST_PROXY: "true"

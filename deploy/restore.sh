@@ -12,6 +12,16 @@ flock -n 9 || { echo 'Another backup or restore is running.' >&2; exit 1; }
 python3 deploy/verify-backup.py "$backup_path"
 # Read the entire dump with PostgreSQL's decoder before interrupting live service.
 docker compose exec -T postgres pg_restore --file=/dev/null < "$backup_path/database.dump"
+live_tables="$(docker compose exec -T postgres sh -c 'psql -X -A -t -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<< "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('crm_company_settings','crm_project_members','auth_mfa_factors')")"
+if [[ -n "$live_tables" ]]; then
+  backup_catalog="$(docker compose exec -T postgres pg_restore --list < "$backup_path/database.dump")"
+  while IFS= read -r table; do
+    if ! grep -Eq "[[:space:]]TABLE public ${table}[[:space:]]" <<< "$backup_catalog"; then
+      printf 'This backup predates %s. Restore into an empty recovery database and verify there.\n' "$table" >&2
+      exit 1
+    fi
+  done <<< "$live_tables"
+fi
 docker compose stop app
 # Keep the app stopped on any failure. Inspect logs and restore a known-good backup.
 docker compose exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --no-acl --single-transaction' < "$backup_path/database.dump"

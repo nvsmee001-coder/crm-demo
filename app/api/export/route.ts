@@ -5,7 +5,8 @@ export const dynamic='force-dynamic';
 export async function GET(request:Request) {
   const user=await getChatGPTUser();
   if(!user) return Response.json({error:'Vui lòng đăng nhập.'},{status:401});
-  const mode=new URL(request.url).searchParams.get('mode')==='live'?'live':'demo';
+  const mode=new URL(request.url).searchParams.get('mode') ?? 'live';
+  if(mode!=='demo' && mode!=='live') return Response.json({error:'Không gian không hợp lệ.'},{headers:{'Cache-Control':'private, no-store'},status:400});
   try {
     await requireOwner(user);
     const workspace=await loadWorkspace(mode,user);

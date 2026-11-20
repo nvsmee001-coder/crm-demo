@@ -1,11 +1,13 @@
-import type { AccessViewer, Activity, Collection, Command, Customer, CustomerAction, CustomerNote, CustomerInteraction, Project, Workspace } from './crm-types.js';
-import { CONTENT_STATUSES, CUSTOMER_STATUSES, CONTACT_CHANNELS, CALL_OUTCOMES, DEAL_PROBABILITIES, PROJECT_STATUSES, STAGES, TASK_STATUSES } from './crm-types.js';
-import { collected, isCollectionAction } from './project-collections.js';
-
-export class CRMError extends Error {
-  status: number;
-  constructor(message: string, status = 400) { super(message); this.status = status; }
-}
+import type { AccessContext, AccessViewer, Activity, Collection, Command, Customer, CustomerAction, CustomerNote, CustomerInteraction, Project, Workspace } from './crm-types.js';
+import { CONTENT_STATUSES, CUSTOMER_STATUSES, CONTACT_CHANNELS, CALL_OUTCOMES, DEAL_PROBABILITIES, PROJECT_STATUSES, QUOTE_STAGES, STAGES, TASK_STATUSES } from './crm-types.js';
+import { canWriteCollections, collected, documentKey, isCollectionAction } from './project-collections.js';
+import { CRMError } from './crm-error.js';
+import { applySalesCommand, isSalesAction } from './sales-workflow.js';
+import { isSalesHandoffAction } from './sales-handoff.js';
+import { applyFinanceCommand } from './finance-workflow.js';
+import { hasPublicationApproval, projectOpenWork } from './project-progress.js';
+import type { Content } from './crm-types.js';
+export { CRMError } from './crm-error.js';
 const collections: Collection[] = ['customers', 'services', 'deals', 'projects', 'tasks', 'contents', 'issues', 'assets', 'team'];
 const own = (o: object, key: string) => Object.prototype.hasOwnProperty.call(o, key);
 const str = (v: unknown) => typeof v === 'string' ? v.trim() : '';
@@ -91,9 +93,9 @@ function diff(before:Row,after:Row,keys:string[]):Activity['details'] {
 const fields: Record<Collection, string[]> = {
   customers: ['name','industry','contact','email','phone','owner','status','notes','color','source','priority','nextFollowUp','nextAction','telegram','jobTitle','address','website','background','avatarUrl','favorite','tags','additionalPhones','additionalEmails','socialLinks','relationships'],
   services: ['name','category','price','unit','duration','deliverables','exclusions','revisions','active'],
-  deals: ['name','customerId','serviceId','value','stage','owner','closeDate','nextAction','scope','probability','description'],
+  deals: ['name','customerId','serviceId','value','stage','owner','closeDate','nextAction','scope','probability','description','lossReason'],
   projects: ['name','customerId','serviceId','owner','status','startDate','dueDate','budget','cost','scope','exclusions','revisions','acceptance'],
-  tasks: ['projectId','name','owner','status','dueDate','hours','hourlyCost','notes'],
+  tasks: ['projectId','name','owner','status','dueDate','hours','hourlyCost','notes','deliveryResult'],
   contents: ['projectId','title','channel','batch','publishDate','status','owner','body','feedback','url'],
   changes: ['projectId','title','reason','fee','extraDays','status','customerConfirmed','confirmation'],
   issues: ['projectId','title','description','owner','priority','status','dueDate'],
@@ -234,12 +236,25 @@ function log(w: Workspace, actor: string, now: string, textValue: string, kind: 
   const activity: Activity = {id:crypto.randomUUID(), text:textValue,time:now,actor,kind,entityId,details}; w.activities.unshift(activity);
 }
 
-function applyCollection(w: Workspace, command: Command, actor: string, now: string) {
+function applyCollection(w: Workspace, command: Command, actor: string, now: string, viewer: CommandViewer, live: boolean) {
   const p = project(w, command.id);
   const d = command.data || {};
   const today = businessDate(now);
   const action = command.action;
   const ledger = p.ledger;
+  if (viewer.role === 'finance' && !p.contract) throw new CRMError('Hợp đồng chưa có trong sổ theo dõi của Tài chính.',403);
+  if (action === 'void_project_receipt') check(!live,'Hãy gửi đề nghị xử lý phiếu để Chủ sở hữu xác nhận.');
+  if (live && action !== 'confirm_legacy_contract') check(p.contract,'Xác nhận hợp đồng trước khi cập nhật sổ thu tiền.');
+  if (action === 'confirm_legacy_contract' || action === 'request_receipt_correction' || action === 'review_receipt_correction' ||
+    action === 'request_legacy_contract_change' || action === 'review_legacy_contract_change') {
+    check(live && viewer.userId,'Chức năng đối chiếu sử dụng tài khoản trong dữ liệu công ty.');
+    const before = p.budget;
+    const message = applyFinanceCommand(w,p,command,{id:viewer.userId,name:actor,at:now},viewer.role,today);
+    log(w,actor,now,`${message} · ${p.name}`,action,p.id,{
+      budget:{before,after:p.budget}, reference:{before:null,after:d.correctionId ?? d.receiptId ?? d.changeId ?? p.contract?.number},
+    });
+    return;
+  }
   if (action === 'open_project_ledger' || action === 'set_payment_due') {
     date(d.paymentDue, 'Hạn thanh toán', false);
   }
@@ -273,7 +288,7 @@ function applyCollection(w: Workspace, command: Command, actor: string, now: str
     check(paidOn >= businessDate(ledger.openedAt) && paidOn <= today, 'Ngày nhận tiền phải từ ngày mở sổ đến hôm nay.');
     const reference = str(d.reference);
     check(reference.length > 0 && reference.length <= 120, 'Nhập mã phiếu hoặc mã giao dịch tối đa 120 ký tự.');
-    check(!ledger.receipts.some(r => !r.voided && r.reference.toLowerCase() === reference.toLowerCase()), 'Mã chứng từ đã có trên dự án.');
+    check(!ledger.receipts.some(r => !r.voided && documentKey(r.reference) === documentKey(reference)), 'Mã chứng từ đã có trên dự án.');
     const receipt = {id: crypto.randomUUID(), kind: 'payment' as const, amount, date: paidOn, reference, createdAt: now, createdBy: actor};
     ledger.receipts.unshift(receipt);
     log(w, actor, now, `Ghi thu ${p.name} · ${reference}`, action, p.id, {amount: {before: null, after: amount}});
@@ -299,11 +314,90 @@ function applyCollection(w: Workspace, command: Command, actor: string, now: str
   log(w, actor, now, `Hủy phiếu thu ${p.name} · ${receipt.reference || 'Số dư mở sổ'}`, action, p.id,
     {receiptId: {before: null, after: receipt.id}, reason: {before: null, after: reason}});
 }
-function checkComplete(w: Workspace, p: Project) {
-  check(!w.tasks.some(t => t.projectId === p.id && t.status !== 'Hoàn tất'), 'Còn công việc chưa hoàn tất.');
-  check(!w.contents.some(t => t.projectId === p.id && t.status !== 'Đã đăng'), 'Còn nội dung chưa đăng.');
-  check(!w.issues.some(t => t.projectId === p.id && !['Đã xử lý','Đã giải quyết'].includes(t.status)), 'Còn vướng mắc chưa xử lý.');
+function movePendingCustomerActions(w: Workspace, customer: Customer, from: string | undefined, to: string, actor: string, now: string) {
+  if (!from) return;
+  const previousId = memberId(w,from);
+  if (previousId === to) return;
+  for (const action of customer.actions || []) {
+    if (action.status !== 'Cần làm' || (action.owner !== previousId && action.owner !== from)) continue;
+    const oldOwner = action.owner;
+    action.owner = to;
+    action.updatedAt = now;
+    log(w, actor, now, 'Chuyển việc đang chờ: '+action.title, 'reassign_customer_action', customer.id, {
+      owner: {before: oldOwner, after: to}, actionId: {before: action.id, after: action.id},
+    });
+  }
 }
+
+function memberId(w: Workspace, value: string) {
+  return (w.team.find(member=>member.id === value) ?? w.team.find(member=>member.name === value))?.id ?? value;
+}
+
+function assertNoPendingHandoff(customer: Customer) {
+  check(!customer.salesHandoff || customer.salesHandoff.resolution, 'Hãy xử lý đề nghị bàn giao sang Sale đang chờ trước.');
+}
+
+type CommandViewer = Pick<AccessViewer,'role'|'memberId'> & Partial<Pick<AccessContext,'userId'|'name'>>;
+
+function applySalesHandoff(w: Workspace, command: Command, actor: string, now: string, viewer?: CommandViewer) {
+  check(viewer?.userId, 'Cần đăng nhập để xử lý bàn giao.');
+  const customer = find(w.customers,command.id,'Khách hàng');
+  const data = command.data ?? {};
+  const author = {id:viewer.userId,name:actor,at:now};
+  const previous = customer.salesHandoff;
+  if (command.action === 'request_sales_handoff') {
+    assertNoPendingHandoff(customer);
+    check(customer.telesalesOwner && customer.telesalesStatus === 'Đủ điều kiện', 'Chỉ gửi khách đủ điều kiện từ danh sách Telesales.');
+    check(!['Tạm ngừng','Không phù hợp'].includes(customer.status), 'Khách hiện không ở trạng thái tiếp nhận.');
+    const fromMemberId = ownerId(w,customer.telesalesOwner);
+    const toMemberId = ownerId(w,data.recipientId);
+    check(fromMemberId !== toMemberId, 'Chọn Sale khác với nhân sự Telesales phụ trách.');
+    date(data.dueDate,'Hạn tiếp nhận');
+    check(String(data.dueDate) >= businessDate(now), 'Hạn tiếp nhận cần từ hôm nay trở đi.');
+    text(data.summary,'Nhu cầu và việc tiếp theo');
+    check(str(data.summary).length <= 3000, 'Tóm tắt bàn giao tối đa 3000 ký tự.');
+    customer.salesHandoff = {
+      id:crypto.randomUUID(), customerName:customer.name, fromMemberId, fromName:ownerName(w,fromMemberId), toMemberId,
+      toName:ownerName(w,toMemberId), summary:str(data.summary), dueDate:String(data.dueDate), requested:author,
+    };
+    customer.updatedAt = now;
+    log(w,actor,now,`Đề nghị bàn giao ${customer.name} sang Sale`,command.action,customer.id,{handoff:{before:null,after:structuredClone(customer.salesHandoff)}});
+    return;
+  }
+
+  check(previous && !previous.resolution && previous.id === data.handoffId, 'Đề nghị bàn giao đã thay đổi.');
+  const decision = command.action === 'cancel_sales_handoff' ? 'cancelled' : data.decision;
+  check(command.action === 'cancel_sales_handoff' || decision === 'accepted' || decision === 'returned', 'Chọn nhận hoặc trả lại khách.');
+  const reason = data.reason ?? '';
+  text(reason,'Lý do',decision !== 'accepted');
+  check(str(reason).length <= 3000, 'Lý do tối đa 3000 ký tự.');
+  const oldOwner = customer.owner;
+  if (decision === 'accepted') {
+    check(viewer.role === 'account' && viewer.memberId === previous.toMemberId, 'Chỉ Sale được chỉ định mới có thể tiếp nhận.');
+    check(customer.telesalesOwner && memberId(w,customer.telesalesOwner) === previous.fromMemberId && customer.telesalesStatus === 'Đủ điều kiện', 'Phân công Telesales đã thay đổi.');
+    check(!['Tạm ngừng','Không phù hợp'].includes(customer.status), 'Khách hiện không ở trạng thái tiếp nhận.');
+    customer.owner = previous.toMemberId;
+    movePendingCustomerActions(w,customer,oldOwner,customer.owner,actor,now);
+    movePendingCustomerActions(w,customer,customer.telesalesOwner,customer.owner,actor,now);
+    customer.telesalesOwner = '';
+    customer.telesalesStatus = 'Đã bàn giao';
+    for (const deal of w.deals) {
+      if (deal.customerId !== customer.id || ['Đã chốt','Không thành công'].includes(deal.stage) || memberId(w,deal.owner) !== memberId(w,oldOwner) || deal.owner === customer.owner) continue;
+      const previousOwner = deal.owner;
+      deal.owner = customer.owner;
+      log(w,actor,now,`Chuyển cơ hội đang mở: ${deal.name}`,'reassign_deal_after_handoff',deal.id,{owner:{before:previousOwner,after:deal.owner}});
+    }
+  }
+  // Returns and cancellations leave both source assignments and the next follow-up in place.
+  check(decision === 'accepted' || decision === 'returned' || decision === 'cancelled', 'Trạng thái bàn giao không hợp lệ.');
+  previous.resolution = {...author,decision,reason:str(reason)};
+  customer.updatedAt = now;
+  const label = {accepted:'Tiếp nhận',returned:'Trả lại',cancelled:'Hủy đề nghị bàn giao'}[decision];
+  log(w,actor,now,`${label}: ${customer.name}`,command.action,customer.id,{
+    owner:{before:oldOwner,after:customer.owner}, handoff:{before:null,after:structuredClone(previous)},
+  });
+}
+
 function referenced(w: Workspace, c: Collection, r: Row) {
   if (c === 'customers') return [...w.deals,...w.projects].some(x=>x.customerId===r.id) || w.customers.some(customer=>customer.id!==r.id && customer.relationships?.some(relationship=>relationship.customerId===r.id));
   if (c === 'services') return [...w.deals,...w.projects,...w.assets].some(x=>x.serviceId===r.id);
@@ -312,15 +406,27 @@ function referenced(w: Workspace, c: Collection, r: Row) {
   return false;
 }
 
-export function applyCommand(current: Workspace, command: Command, actor: string, now = new Date().toISOString(), viewer?: Pick<AccessViewer,'role'|'memberId'>): Workspace {
+export function applyCommand(current: Workspace, command: Command, actor: string, now = new Date().toISOString(), viewer?: CommandViewer, liveSales = false): Workspace {
   check(command && typeof command === 'object', 'Yêu cầu không hợp lệ.');
   const prospect=command.action==='create_prospect';
   const w = normalizeWorkspace(current); const d = command.data || {}; const c = prospect?'customers':command.collection; const id = command.id;
+  const requirePublicationApproval = liveSales && w.settings.contentApprovalRequired === true;
   check(!['approve_content','request_changes','approve_change','reject_change'].includes(String(command.action)), 'Tính năng duyệt và phát sinh đã được gỡ bỏ.');
   check(typeof d === 'object' && !Array.isArray(d), 'Dữ liệu không hợp lệ.');
+  if (isSalesHandoffAction(command.action)) {
+    check(liveSales, 'Luồng bàn giao sang Sale chỉ dùng cho dữ liệu công ty.');
+    applySalesHandoff(w,command,actor,now,viewer);
+    return w;
+  }
+  if (isSalesAction(command.action)) {
+    check(liveSales, 'Luồng duyệt bán hàng chỉ sử dụng trong dữ liệu công ty.');
+    const message = applySalesCommand(w, { ...command, action:command.action }, viewer?.userId && viewer.name ? {...viewer, userId:viewer.userId, name:viewer.name} : undefined, now, businessDate(now));
+    log(w,actor,now,message,command.action,id);
+    return w;
+  }
   if (isCollectionAction(command.action)) {
-    if (viewer?.role !== 'owner') throw new CRMError('Chỉ chủ sở hữu được ghi sổ thu tiền.', 403);
-    applyCollection(w, command, actor, now);
+    if (!viewer || !canWriteCollections(command.action,viewer.role)) throw new CRMError('Bạn không có quyền thực hiện thao tác trên sổ thu tiền.', 403);
+    applyCollection(w, command, actor, now, viewer, liveSales);
     return w;
   }
   if(command.action==='import_customers' || command.action==='import_prospects'){
@@ -355,7 +461,7 @@ export function applyCommand(current: Workspace, command: Command, actor: string
       const customers=assignment.ids.map(customerId=>{
         text(customerId,'Mã khách hàng');check(!usedCustomers.has(String(customerId)),'Một khách hàng không thể được chia cho nhiều nhân viên trong cùng lần.');usedCustomers.add(String(customerId));
         check(usedCustomers.size<=500,'Mỗi lần chia tối đa 500 khách hàng.');
-        const customer=find(w.customers,customerId,'Khách hàng');check(safePhone(customer.phone),`${customer.name} chưa có số điện thoại hợp lệ để chuyển telesales.`);
+        const customer=find(w.customers,customerId,'Khách hàng');assertNoPendingHandoff(customer);check(safePhone(customer.phone),`${customer.name} chưa có số điện thoại hợp lệ để chuyển telesales.`);
         check(!customer.telesalesOwner || d.allowReassign,`${customer.name} đã có telesales phụ trách. Bật xác nhận phân công lại để tiếp tục.`);
         return customer;
       });
@@ -364,6 +470,7 @@ export function applyCommand(current: Workspace, command: Command, actor: string
     for(const assignment of plan)for(const customer of assignment.customers){
       const previous=structuredClone(customer) as unknown as Row;
       customer.telesalesOwner=assignment.owner;customer.telesalesStatus='Chờ gọi';customer.telesalesQueuedAt=now;customer.telesalesHandoffNote=str(d.note);customer.nextFollowUp=str(d.nextFollowUp);customer.updatedAt=now;
+      movePendingCustomerActions(w, customer, previous.telesalesOwner as string | undefined, assignment.owner, actor, now);
       const previousOwner=previous.telesalesOwner?ownerName(w,String(previous.telesalesOwner)):'chưa phân công';
       log(w,actor,now,`Chia khách telesales: ${customer.name} · ${previousOwner} → ${ownerName(w,assignment.owner)} · ${str(d.note)}`,'distribute_customers',customer.id,diff(previous,customer as unknown as Row,['telesalesOwner','telesalesStatus','telesalesQueuedAt','telesalesHandoffNote','nextFollowUp']));
     }
@@ -379,12 +486,23 @@ export function applyCommand(current: Workspace, command: Command, actor: string
       if(prospect)assignProspect(r,requireProspectMember(w,viewer),viewer?.role==='telesales',now);
       if (c === 'projects') { check(r.status !== 'Hoàn tất', 'Hãy nghiệm thu để hoàn tất dự án.'); r.originalDueDate=r.dueDate; }
       if (c === 'deals') {
+        if (viewer?.role === 'account') r.owner=viewer.memberId;
+        if (liveSales) {
+          const customer = find(w.customers,r.customerId,'Khách hàng');
+          check(customer.telesalesStatus !== 'Đủ điều kiện', 'Cần Sale tiếp nhận khách Telesales trước khi tạo cơ hội.');
+        }
         check(r.stage !== 'Đã chốt', 'Hãy dùng thao tác Chốt cơ hội để tạo dự án.');
+        if (liveSales) check(!QUOTE_STAGES.has(String(r.stage)), 'Lập và duyệt báo giá trước khi chuyển sang giai đoạn này.');
+        if (liveSales && r.stage === 'Không thành công') text(r.lossReason,'Lý do không thành công');
         if(own(r,'probability'))number(r.probability,'Xác suất',100);
         r.probability=r.stage==='Không thành công'?0:(r.probability??DEAL_PROBABILITIES[String(r.stage)]??10);
         r.createdAt=now;r.createdBy=actor;r.stageChangedAt=now;r.stageHistory=[{stage:r.stage,at:now,actor}];
       }
       if (['tasks','contents','issues'].includes(c)) project(w,r.projectId,true);
+      if (c === 'contents' && requirePublicationApproval) {
+        check(r.status !== 'Đã đăng', 'Lưu và duyệt nội dung trước khi ghi đã đăng.');
+        if (r.status === 'Sẵn sàng đăng') text(r.body,'Nội dung gửi duyệt');
+      }
       if (c === 'customers') { normalizeCustomerInput(w,r); checkCustomerDuplicates(w,r,undefined); }
       validate(w,c,r); list.push(r);
       log(w,actor,now,prospect?`Thêm khách tự khai thác: ${recordLabel(r)}`:`Tạo ${recordLabel(r)}`,command.action,r.id);
@@ -392,9 +510,14 @@ export function applyCommand(current: Workspace, command: Command, actor: string
     }
     const r = find(list,id,'Bản ghi');
     if (command.action === 'delete') {
+      check(c !== 'customers' || !r.salesHandoff, 'Hồ sơ đã có lịch sử bàn giao. Dùng trạng thái Tạm ngừng để lưu hồ sơ.');
+      if (['tasks','contents','issues'].includes(c)) project(w, r.projectId, true);
+      if (c === 'projects') project(w, id, true);
       check(!(c === 'projects' && r.ledger), 'Không thể xóa dự án đã mở sổ thu tiền.');
+      check(!(c === 'projects' && r.contract), 'Không thể xóa dự án đã xác nhận hợp đồng.');
       check(!referenced(w,c,r), 'Bản ghi đang được sử dụng; hãy xử lý các liên kết trước.');
       check(!(c === 'deals' && r.projectId), 'Không thể xóa cơ hội đã tạo dự án.');
+      check(!(c === 'deals' && Array.isArray(r.quotes) && r.quotes.length), 'Không thể xóa cơ hội có phiên bản báo giá.');
       check(!(c === 'contents' && r.status === 'Đã đăng'), 'Không thể xóa nội dung đã đăng.');
       check(!(c === 'contents' && r.approvedAt), 'Không thể xóa nội dung có bằng chứng xác nhận đã lưu.');
       check(!(c === 'contents' && Array.isArray(r.history) && r.history.some((entry:Record<string,unknown>)=>entry.approvedAt)), 'Không thể xóa nội dung có lịch sử đã được duyệt.');
@@ -402,8 +525,22 @@ export function applyCommand(current: Workspace, command: Command, actor: string
     }
     const update = pick(c,d);
     const before = structuredClone(r);
+    if (c === 'customers' && (own(update,'owner') && memberId(w,String(update.owner)) !== r.owner ||
+      ['Tạm ngừng','Không phù hợp'].includes(String(update.status)) && update.status !== r.status)) assertNoPendingHandoff(r as unknown as Customer);
     if (c === 'deals') {
       check(r.stage !== 'Đã chốt', 'Cơ hội đã chốt; hãy quản lý thay đổi trong dự án.');check(update.stage !== 'Đã chốt', 'Hãy dùng thao tác Chốt cơ hội để tạo dự án.');
+      if (liveSales) {
+        const deal = find(w.deals,id,'Cơ hội');
+        if (deal.quotes?.length) for (const key of ['customerId','serviceId']) check(!own(update,key) || update[key]===r[key], 'Khách hàng và dịch vụ đã gắn với báo giá.');
+        if (update.stage !== r.stage && QUOTE_STAGES.has(String(update.stage))) {
+          check(deal.quotes?.some(quote=>quote.status === 'approved' && quote.validUntil >= businessDate(now)), 'Cần báo giá đã duyệt còn hiệu lực để chuyển sang giai đoạn này.');
+        }
+        if (update.stage === 'Không thành công' && r.stage !== 'Không thành công') {
+          text(update.lossReason,'Lý do không thành công');
+          const win = deal.winRequests?.at(-1);
+          check(deal.quotes?.at(-1)?.status !== 'submitted' && (!win || win.reviewed), 'Cần xử lý yêu cầu đang chờ trước khi đóng cơ hội.');
+        }
+      }
       if(own(update,'probability'))number(update.probability,'Xác suất',100);
       if(own(update,'stage'))oneOf(update.stage,STAGES,'Giai đoạn');
       if(own(update,'stage') && update.stage!==r.stage){
@@ -414,6 +551,7 @@ export function applyCommand(current: Workspace, command: Command, actor: string
       if((update.stage??r.stage)==='Không thành công')update.probability=0;
     }
     if (c === 'projects') {
+      if (r.contract) for (const key of ['budget','scope','exclusions','revisions']) check(!own(update,key) || update[key]===r[key], 'Dùng luồng điều chỉnh hợp đồng để cập nhật giá trị hoặc phạm vi đã xác nhận.');
       if (r.ledger && own(update, 'budget')) {
         const ledger = project(w, id).ledger!;
         check(typeof update.budget === 'number' && Number.isSafeInteger(update.budget) && update.budget >= collected(ledger),
@@ -429,17 +567,27 @@ export function applyCommand(current: Workspace, command: Command, actor: string
       for (const records of [w.customers,w.deals,w.projects,w.tasks,w.contents,w.issues]) for (const item of records) if (item.owner===r.name) item.owner=String(update.name);
     }
     if (c === 'contents') {
-      const contentChanged = ['body','title','url'].some(key=>own(update,key) && update[key]!==r[key]);
+      const contentChanged = ['body','title','url','channel'].some(key=>own(update,key) && update[key]!==r[key]);
+      if (requirePublicationApproval) {
+        if (update.status==='Đã đăng' && r.status!=='Đã đăng') {
+          check(!contentChanged && r.status==='Sẵn sàng đăng' && hasPublicationApproval(r as unknown as Content), 'Phiên bản hiện tại cần được duyệt trước khi ghi đã đăng.');
+        }
+        if (update.status==='Sẵn sàng đăng') text(own(update,'body') ? update.body : r.body,'Nội dung gửi duyệt');
+      }
       if (contentChanged) {
         const history = (r.history as Record<string,unknown>[] | undefined) || [];
-        history.push({version:r.version,title:r.title,body:r.body,url:r.url,approvedAt:r.approvedAt,approvedBy:r.approvedBy,confirmation:r.approvalConfirmation});
+        history.push({version:r.version,title:r.title,body:r.body,url:r.url,channel:r.channel,approvedAt:r.approvedAt,approvedBy:r.approvedBy,confirmation:r.approvalConfirmation});
         r.history=history; r.version=Number(r.version)+1;
         delete r.approvedAt; delete r.approvedBy; delete r.approvedVersion; delete r.approvalConfirmation;
+        delete r.publicationReview;
         update.status='Đang sản xuất';
       }
     }
     Object.assign(r,update);
-    if (c === 'customers') { normalizeCustomerInput(w,r); checkCustomerDuplicates(w,r,before); r.updatedAt=now; }
+    if (c === 'customers') {
+      normalizeCustomerInput(w,r); checkCustomerDuplicates(w,r,before); r.updatedAt=now;
+      movePendingCustomerActions(w, r as unknown as Customer, before.owner as string, r.owner as string, actor, now);
+    }
     validate(w,c,r);
     const details=diff(before,r,fields[c]);
     let message=`Cập nhật ${recordLabel(r)}`;
@@ -450,7 +598,35 @@ export function applyCommand(current: Workspace, command: Command, actor: string
     if (own(d,'companyName')) {text(d.companyName,'Tên công ty');w.settings.companyName=str(d.companyName);}
     if (own(d,'slogan')) {text(d.slogan,'Mô tả',false);w.settings.slogan=str(d.slogan);}
     if (own(d,'escalationHours')) {number(d.escalationHours,'Ngưỡng cảnh báo',8760);check(Number(d.escalationHours)>=1,'Ngưỡng cảnh báo tối thiểu 1 giờ.');w.settings.escalationHours=Number(d.escalationHours);}
-    log(w,actor,now,'Cập nhật cài đặt công ty','settings'); return w;
+    const before = w.settings.contentApprovalRequired === true;
+    if (own(d,'contentApprovalRequired')) {
+      if (!liveSales || viewer?.role!=='owner') throw new CRMError('Chủ sở hữu thay đổi quy định duyệt nội dung trong dữ liệu công ty.',403);
+      check(typeof d.contentApprovalRequired==='boolean','Quy định duyệt nội dung không hợp lệ.');
+      w.settings.contentApprovalRequired = d.contentApprovalRequired;
+    }
+    log(w,actor,now,'Cập nhật cài đặt công ty','settings',undefined,own(d,'contentApprovalRequired')?{contentApprovalRequired:{before,after:w.settings.contentApprovalRequired}}:undefined); return w;
+  }
+  if (command.action === 'review_content_publication') {
+    if ((viewer?.role!=='owner' && viewer?.role!=='manager') || !viewer.userId) throw new CRMError('Chức năng dành cho Chủ sở hữu hoặc Quản lý.',403);
+    check(requirePublicationApproval,'Công ty chưa bật duyệt nội dung trước khi đăng.');
+    const content=find(w.contents,id,'Nội dung'); project(w,content.projectId,true);
+    check(content.status==='Sẵn sàng đăng' && content.version===d.version,'Nội dung hoặc phiên bản chờ duyệt đã thay đổi.');
+    check(d.decision==='approved' || d.decision==='returned','Chọn duyệt hoặc trả lại nội dung.');
+    text(d.reason,d.decision==='approved'?'Căn cứ duyệt':'Lý do trả lại');
+    check(str(d.reason).length<=3000,'Căn cứ hoặc lý do tối đa 3000 ký tự.');
+    const before = content.publicationReview;
+    content.publicationReview = {id:viewer.userId,name:actor,at:now,version:content.version,decision:d.decision,reason:str(d.reason)};
+    if (d.decision==='approved') {
+      text(content.body,'Nội dung gửi duyệt');
+      check(!hasPublicationApproval(content),'Phiên bản này đã được duyệt.');
+      content.approvedVersion=content.version; content.approvedAt=now; content.approvedBy=actor; content.approvalConfirmation=str(d.reason);
+    } else {
+      content.status='Đang sản xuất';
+      delete content.approvedVersion; delete content.approvedAt; delete content.approvedBy; delete content.approvalConfirmation;
+    }
+    log(w,actor,now,`${d.decision==='approved'?'Duyệt':'Trả lại'} nội dung ${content.title} · V${content.version}`,command.action,content.id,
+      {review:{before:before ?? null,after:content.publicationReview}});
+    return w;
   }
   if(command.action==='add_customer_note' || command.action==='update_customer_note') {
     const customer=find(w.customers,id,'Khách hàng');text(d.body,'Nội dung ghi chú');
@@ -491,12 +667,13 @@ export function applyCommand(current: Workspace, command: Command, actor: string
     if(own(d,'nextFollowUp')){text(d.nextFollowUp,'Ngày liên hệ tiếp',false);date(d.nextFollowUp,'Ngày liên hệ tiếp',false);}
     const targets=[...new Set(d.ids as string[])].map(customerId=>find(w.customers,customerId,'Khách hàng'));
     // Every target is validated before changing the queue, preserving atomicity.
-    for(const customer of targets)check(safePhone(customer.phone),`${customer.name} chưa có số điện thoại hợp lệ để chuyển telesales.`);
+    for(const customer of targets){assertNoPendingHandoff(customer);check(safePhone(customer.phone),`${customer.name} chưa có số điện thoại hợp lệ để chuyển telesales.`);}
     for(const customer of targets) {
       const previous=structuredClone(customer) as unknown as Row;
       customer.telesalesOwner=nextOwner;customer.telesalesStatus='Chờ gọi';customer.telesalesQueuedAt=now;customer.telesalesHandoffNote=str(d.note);customer.updatedAt=now;
       if(own(d,'nextFollowUp'))customer.nextFollowUp=str(d.nextFollowUp);
       const previousOwner=previous.telesalesOwner?ownerName(w,String(previous.telesalesOwner)):'chưa phân công';
+      movePendingCustomerActions(w, customer, previous.telesalesOwner as string | undefined, nextOwner, actor, now);
       const details=diff(previous,customer as unknown as Row,['telesalesOwner','telesalesStatus','telesalesQueuedAt','telesalesHandoffNote','nextFollowUp']);
       log(w,actor,now,`Chuyển telesales: ${customer.name} · ${previousOwner} → ${ownerName(w,nextOwner)} · ${str(d.note)}`,'transfer_to_telesales',customer.id,details);
     }
@@ -539,8 +716,10 @@ export function applyCommand(current: Workspace, command: Command, actor: string
   }
   if (command.action === 'handoff_customer') {
     const customer=find(w.customers,id,'Khách hàng');const nextOwner=ownerId(w,d.owner);text(d.note,'Nội dung bàn giao');
+    assertNoPendingHandoff(customer);
     check(nextOwner!==customer.owner,'Người nhận đang phụ trách khách hàng này.');const previous=customer.owner;
     customer.owner=nextOwner;customer.updatedAt=now;
+    movePendingCustomerActions(w, customer, previous, nextOwner, actor, now);
     log(w,actor,now,`Bàn giao ${customer.name} từ ${ownerName(w,previous)} cho ${ownerName(w,nextOwner)}: ${str(d.note)}`,'handoff_customer',customer.id,{owner:{before:previous,after:nextOwner}});
     return w;
   }
@@ -555,7 +734,9 @@ export function applyCommand(current: Workspace, command: Command, actor: string
     if(own(update,'nextFollowUp')){text(update.nextFollowUp,'Ngày liên hệ tiếp',false);date(update.nextFollowUp,'Ngày liên hệ tiếp',false);}
     const targets=ids.map(customerId=>find(w.customers,customerId,'Khách hàng'));
     for(const customer of targets) {
+      if (own(update,'owner') && update.owner !== customer.owner || ['Tạm ngừng','Không phù hợp'].includes(String(update.status)) && update.status !== customer.status) assertNoPendingHandoff(customer);
       const previous=structuredClone(customer) as unknown as Row;Object.assign(customer,update);customer.updatedAt=now;
+      if (own(update,'owner')) movePendingCustomerActions(w, customer, previous.owner as string, customer.owner, actor, now);
       const details=diff(previous,customer as unknown as Row,Object.keys(update));
       let message=`Cập nhật nhóm: ${customer.name}`;
       if(own(update,'owner') && previous.owner!==customer.owner)message+=` · ${ownerName(w,String(previous.owner))} → ${ownerName(w,customer.owner)}`;
@@ -564,6 +745,7 @@ export function applyCommand(current: Workspace, command: Command, actor: string
     return w;
   }
   if (command.action === 'win_deal') {
+    check(!liveSales,'Hãy đề nghị chốt thắng từ báo giá đã duyệt để Quản lý hoặc Chủ sở hữu xác nhận.');
     const deal=find(w.deals,id,'Cơ hội'); check(!deal.projectId && deal.stage!=='Đã chốt','Cơ hội này đã được chốt.');
     const service=find(w.services,deal.serviceId,'Dịch vụ'); find(w.customers,deal.customerId,'Khách hàng');
     text(deal.scope || service.deliverables,'Phạm vi dịch vụ');
@@ -579,8 +761,38 @@ export function applyCommand(current: Workspace, command: Command, actor: string
   if (command.action === 'resolve_issue') {
     const issue=find(w.issues,id,'Vướng mắc'); project(w,issue.projectId,true); check(!['Đã xử lý','Đã giải quyết'].includes(issue.status),'Vướng mắc đã được xử lý.');text(d.resolution,'Kết quả xử lý');issue.status='Đã giải quyết';issue.resolution=str(d.resolution);issue.resolvedAt=now;log(w,actor,now,`Giải quyết ${issue.title}`,'resolve_issue',issue.id);return w;
   }
+  if (command.action === 'reopen_project') {
+    const p = project(w, id);
+    check(p.status === 'Hoàn tất', 'Chỉ mở lại dự án đã hoàn tất.');
+    text(d.reason, 'Lý do mở lại');
+    log(w, actor, now, 'Mở lại dự án '+p.name+': '+str(d.reason), 'reopen_project', p.id, {
+      status: {before: p.status, after: 'Đang triển khai'},
+      acceptance: {before: p.acceptance, after: ''},
+      acceptanceRecord: {before:p.acceptanceRecord ?? null,after:null},
+      reason: {before:null,after:str(d.reason)},
+    });
+    p.status = 'Đang triển khai';
+    p.acceptance = '';
+    delete p.acceptanceRecord;
+    return w;
+  }
   if (command.action === 'complete_project') {
-    const p=project(w,id,true);checkComplete(w,p);text(d.acceptance,'Bằng chứng nghiệm thu');p.acceptance=str(d.acceptance);p.status='Hoàn tất';log(w,actor,now,`Nghiệm thu và hoàn tất ${p.name}`,'complete_project',p.id);return w;
+    const p=project(w,id,true);
+    const open=projectOpenWork(w,p.id);
+    const remaining=[open.tasks&&`${open.tasks} công việc chưa hoàn tất`,open.contents&&`${open.contents} nội dung chưa đăng`,open.issues&&`${open.issues} vướng mắc chưa xử lý`].filter(Boolean);
+    const exceptionReason = str(d.exceptionReason);
+    if (remaining.length && !exceptionReason) throw new CRMError(`Còn ${remaining.join(', ')}.`);
+    if (exceptionReason) {
+      if (!liveSales || viewer?.role!=='owner' || !viewer.userId) throw new CRMError('Chỉ Chủ sở hữu được xác nhận ngoại lệ nghiệm thu.',403);
+      check(remaining.length && exceptionReason.length<=3000,'Cần hạng mục còn mở và lý do ngoại lệ tối đa 3000 ký tự.');
+    }
+    text(d.acceptance,'Bằng chứng nghiệm thu');
+    const previous=p.acceptance;
+    p.acceptance=str(d.acceptance);
+    p.status='Hoàn tất';
+    if (viewer?.userId) p.acceptanceRecord={actor:{id:viewer.userId,name:actor,at:now},evidence:p.acceptance,exception:exceptionReason?{reason:exceptionReason,open}:undefined};
+    log(w,actor,now,`Nghiệm thu và hoàn tất ${p.name}${exceptionReason?' · Ngoại lệ':''}`,'complete_project',p.id,{acceptance:{before:previous,after:p.acceptance},acceptanceRecord:{before:null,after:p.acceptanceRecord ?? null}});
+    return w;
   }
   throw new CRMError('Thao tác không được hỗ trợ.');
 }

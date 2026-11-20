@@ -3,6 +3,7 @@ import { getAccess } from '@/lib/access-store';
 import { loadWorkspace } from '@/lib/crm-store';
 import { fileMetadata, readFileBytes } from '@/lib/file-store';
 import { rateLimit } from '@/lib/http-security';
+import { deliveryCanReadContentFile } from '@/lib/delivery-store';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
@@ -16,7 +17,10 @@ export async function GET(request: Request, context: {params: Promise<{path:stri
     if (!id || path.length > 2) return new Response('Không tìm thấy tệp.', {status:404});
     const file = await fileMetadata(id);
     if (!file || file.owner_id !== access.ownerId) return new Response('Không tìm thấy tệp.', {status:404});
-    if (access.role !== 'owner' && access.role !== 'manager') {
+    if (access.role==='delivery') {
+      const origin=process.env.APP_ORIGIN || new URL(request.url).origin;
+      if (!await deliveryCanReadContentFile(user,id,origin)) return new Response('Không tìm thấy tệp.',{status:404});
+    } else if (access.role !== 'owner' && access.role !== 'manager') {
       const {data} = await loadWorkspace('live', user);
       const origin = process.env.APP_ORIGIN || new URL(request.url).origin;
       const linked = data.customers.some(customer => {

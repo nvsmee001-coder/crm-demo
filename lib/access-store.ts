@@ -2,15 +2,15 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { pool, withTransaction } from './database';
 import type { AccessAccount, AccessCommand, AccessContext, AccessResponse, CRMIdentity, Workspace } from './crm-types';
-import { CRMError } from './crm-engine';
-import { createWorkspace } from './crm-seed';
+import { applyCommand, CRMError } from './crm-engine';
 import type { AdminDashboard, AdminEvent } from './admin-types';
+import { getWorkspaceRow, readWorkspaceRecords, saveWorkspaceRecords, type WorkspaceRow } from './workspace-tables';
+import { mfaAvailable, mfaRequired } from './auth/mfa-crypto';
 export type { AccessContext, CRMIdentity } from './crm-types';
 
 type Control = {id:string;owner_id:string;owner_email:string;owner_name:string;revision:number;mutation_id:string;updated_at:string};
 export type AccountRow = {id:string;email:string;team_member_id:string;role:AccessAccount['role'];active:number;bound_user_id:string|null;version:number;created_at:string;updated_at:string};
-type Stored = {id:string;owner_id:string;owner_email:string;data:string;revision:number;updated_at:string};
-const roles = new Set(['manager','account','telesales']);
+const roles = new Set(['manager','account','telesales','delivery','finance']);
 const cleanEmail = (value:unknown) => typeof value === 'string' ? value.trim().toLowerCase() : '';
 function check(ok:unknown,message:string,status=400):asserts ok { if (!ok) throw new CRMError(message,status); }
 export function accessDatabase() { return pool; }
@@ -22,10 +22,11 @@ function publicAccount(row:AccountRow):AccessAccount {
  * All access/workspace transactions lock this singleton first. Revocations,
  * staff binding, recipient changes and snapshot writes share one lock order.
  */
-async function ownerControl(identity:CRMIdentity, client:PoolClient):Promise<Control> {
-  let row = (await client.query<Control>("SELECT * FROM crm_access_control WHERE id='company' FOR UPDATE")).rows[0];
+async function ownerControl(identity:CRMIdentity, client:PoolClient, readOnly:boolean):Promise<Control> {
+  const select = "SELECT * FROM crm_access_control WHERE id='company'" + (readOnly ? ' FOR SHARE' : ' FOR UPDATE');
+  let row = (await client.query<Control>(select)).rows[0];
   if (row) return row;
-  const existing = (await client.query<Stored>("SELECT * FROM crm_workspaces ORDER BY CASE WHEN id='smee:live' THEN 0 ELSE 1 END, id LIMIT 1")).rows[0];
+  const existing = (await client.query<{owner_id:string;owner_email:string}>("SELECT owner_id,owner_email FROM crm_workspaces ORDER BY CASE WHEN id='smee:live' THEN 0 ELSE 1 END, id LIMIT 1")).rows[0];
   let ownerId:string, ownerEmail:string, ownerName:string;
   if (existing) {
     ownerId=existing.owner_id; ownerEmail=existing.owner_email;
@@ -36,29 +37,30 @@ async function ownerControl(identity:CRMIdentity, client:PoolClient):Promise<Con
     ownerId=identity.userId; ownerEmail=identity.email; ownerName=identity.displayName;
   }
   await client.query("INSERT INTO crm_access_control (id,owner_id,owner_email,owner_name,revision,mutation_id,updated_at) VALUES ('company',$1,$2,$3,0,'',$4) ON CONFLICT(id) DO NOTHING",[ownerId,ownerEmail,ownerName,new Date().toISOString()]);
-  row=(await client.query<Control>("SELECT * FROM crm_access_control WHERE id='company' FOR UPDATE")).rows[0];
+  row=(await client.query<Control>(select)).rows[0];
   check(row,'Không thể xác định chủ sở hữu.',503);
   return row;
 }
 
-async function accessInTransaction(identity:CRMIdentity,client:PoolClient):Promise<AccessContext> {
+async function accessInTransaction(identity:CRMIdentity,client:PoolClient,readOnly=false):Promise<AccessContext> {
   check(identity?.userId && identity.email,'Vui lòng đăng nhập.',401);
-  const control=await ownerControl(identity,client);
+  const control=await ownerControl(identity,client,readOnly);
   const base={userId:identity.userId,name:identity.displayName,email:identity.email,ownerId:control.owner_id,ownerEmail:control.owner_email,ownerName:control.owner_name,controlRevision:control.revision};
   if (identity.userId===control.owner_id) return {...base,role:'owner'};
-  let account=(await client.query<AccountRow>('SELECT * FROM crm_access_accounts WHERE bound_user_id=$1 FOR UPDATE',[identity.userId])).rows[0];
-  if (!account) account=(await client.query<AccountRow>('SELECT * FROM crm_access_accounts WHERE email=$1 FOR UPDATE',[cleanEmail(identity.email)])).rows[0];
+  let account=(await client.query<AccountRow>('SELECT * FROM crm_access_accounts WHERE bound_user_id=$1'+(readOnly?'':' FOR UPDATE'),[identity.userId])).rows[0];
+  if (!account && !readOnly) account=(await client.query<AccountRow>('SELECT * FROM crm_access_accounts WHERE email=$1 FOR UPDATE',[cleanEmail(identity.email)])).rows[0];
   check(account && account.active===1 && roles.has(account.role),'Tài khoản chưa được cấp quyền hoặc đã bị vô hiệu hóa.',403);
   if (!account.bound_user_id) {
-    account=(await client.query<AccountRow>('UPDATE crm_access_accounts SET bound_user_id=$1,version=version+1,updated_at=$2 WHERE id=$3 AND bound_user_id IS NULL AND email=$4 AND active=1 RETURNING *',[identity.userId,new Date().toISOString(),account.id,cleanEmail(identity.email)])).rows[0];
+    const linkedAt=new Date().toISOString();
+    account=(await client.query<AccountRow>('UPDATE crm_access_accounts SET bound_user_id=$1,version=version+1,updated_at=$2 WHERE id=$3 AND bound_user_id IS NULL AND email=$4 AND active=1 RETURNING *',[identity.userId,linkedAt,account.id,cleanEmail(identity.email)])).rows[0];
     check(account,'Không thể liên kết danh tính này với tài khoản nhân viên.',403);
-    await client.query('INSERT INTO crm_access_audit (id,actor_id,actor_email,action,target_id,details,at) VALUES ($1,$2,$3,$4,$5,$6,$7)',[randomUUID(),identity.userId,identity.email,'bind_account',account.id,JSON.stringify({email:account.email}),new Date().toISOString()]);
+    await client.query("UPDATE crm_access_control SET revision=revision+1,mutation_id=$1,updated_at=$2 WHERE id='company'",[randomUUID(),linkedAt]);
+    base.controlRevision++;
+    await client.query('INSERT INTO crm_access_audit (id,actor_id,actor_email,action,target_id,details,at) VALUES ($1,$2,$3,$4,$5,$6,$7)',[randomUUID(),identity.userId,identity.email,'bind_account',account.id,JSON.stringify({email:account.email}),linkedAt]);
   }
   check(account.active===1 && account.bound_user_id===identity.userId && roles.has(account.role),'Không thể liên kết danh tính này với tài khoản nhân viên.',403);
   const live=(await client.query<{linked:boolean}>(`
-    SELECT EXISTS (
-      SELECT 1 FROM jsonb_array_elements(w.data::jsonb->'team') member WHERE member->>'id'=$2
-    ) AS linked
+    SELECT EXISTS (SELECT 1 FROM crm_team member WHERE member.workspace_id=w.id AND member.id=$2) AS linked
     FROM crm_workspaces w WHERE w.id='smee:live' AND w.owner_id=$1
   `,[control.owner_id,account.team_member_id])).rows[0];
   check(live,'Không gian làm việc chưa sẵn sàng.',403);
@@ -68,6 +70,11 @@ async function accessInTransaction(identity:CRMIdentity,client:PoolClient):Promi
 
 export async function getAccess(identity:CRMIdentity,client?:PoolClient):Promise<AccessContext> {
   return client ? accessInTransaction(identity,client) : withTransaction(db=>accessInTransaction(identity,db));
+}
+// Requests with a session already have a bound identity. Readers can proceed
+// together, while the company lock still orders them against revocation/writes.
+export async function getReadAccess(identity:CRMIdentity,client?:PoolClient):Promise<AccessContext> {
+  return client ? accessInTransaction(identity,client,true) : withTransaction(db=>accessInTransaction(identity,db,true));
 }
 export async function requireOwner(identity:CRMIdentity,client?:PoolClient):Promise<AccessContext> {
   const access=await getAccess(identity,client); check(access.role==='owner','Chức năng này chỉ dành cho chủ sở hữu.',403); return access;
@@ -86,16 +93,23 @@ async function responseInTransaction(access:AccessContext,client:PoolClient):Pro
   return result;
 }
 export async function getAccessResponse(identity:CRMIdentity):Promise<AccessResponse> {
-  return withTransaction(async client=>responseInTransaction(await getAccess(identity,client),client));
+  return withTransaction(async client=>responseInTransaction(await getReadAccess(identity,client),client));
 }
 
 export async function getAdminDashboard(identity: CRMIdentity): Promise<AdminDashboard> {
   return withTransaction(async client => {
-    const owner = await requireOwner(identity, client);
+    const owner = await getReadAccess(identity, client);
+    check(owner.role==='owner','Chức năng này chỉ dành cho chủ sở hữu.',403);
     const access = await responseInTransaction(owner, client);
-    const { data } = await liveWorkspace(owner, client);
+    const row = await getWorkspaceRow(client,'live',owner,false);
+    const directory = (await client.query<{settings:Workspace['settings'];team:Workspace['team']}>(`
+      SELECT payload->'settings' AS settings,
+        COALESCE((SELECT jsonb_agg(member.payload ORDER BY member.position) FROM crm_team member WHERE member.workspace_id=$1),'[]') AS team
+      FROM crm_company_settings WHERE workspace_id=$1`, [row.id])).rows[0];
+    check(directory,'Danh bạ chưa được chuyển sang các bảng nghiệp vụ.',503);
+    const {settings,team}=directory;
     // Never send raw event details, credentials, or setup links to the browser.
-    const result = await client.query<Omit<AdminEvent, 'at'> & { at: Date }>(`
+    const result = await client.query<Omit<AdminEvent, 'at'|'reason'> & {at:Date;reason:string|null}>(`
       WITH recent_access AS (
         SELECT id, actor_email, target_id, action, details::jsonb AS detail, at
         FROM crm_access_audit ORDER BY at DESC, id DESC LIMIT 40
@@ -109,36 +123,34 @@ export async function getAdminDashboard(identity: CRMIdentity): Promise<AdminDas
           WHEN a.action = 'upsert' AND a.detail->'before' = 'null'::jsonb THEN 'account_created'
           ELSE a.action END AS action,
         a.actor_email AS actor,
-        COALESCE(a.detail->'after'->>'email', a.detail->>'email', account.email, '') AS subject
+        COALESCE(a.detail->'after'->>'email', a.detail->>'email', account.email, '') AS subject,
+        CASE WHEN a.action IN ('account_disabled','offboarding') THEN a.detail->>'reason' END AS reason
       FROM recent_access a LEFT JOIN crm_access_accounts account ON account.id = a.target_id
       UNION ALL
       SELECT 'auth-' || e.id::text, e.created_at, e.event, COALESCE(actor.email, ''),
-        COALESCE(target_user.email, target_account.email, '')
+        COALESCE(target_user.email, target_account.email, ''), NULL::text
       FROM recent_auth e LEFT JOIN auth_users actor ON actor.id = e.actor_id
         LEFT JOIN auth_users target_user ON target_user.id = e.user_id
         LEFT JOIN crm_access_accounts target_account ON target_account.id = e.user_id
       ORDER BY at DESC, id DESC LIMIT 40
     `);
+    const mfa = await client.query<{ account_id:string|null;owner:boolean;enabled:boolean;pending:boolean }>(`
+      SELECT a.id AS account_id,u.id=$1 AS owner,f.user_id IS NOT NULL AS enabled,u.mfa_pending_enrollment AS pending
+      FROM auth_users u LEFT JOIN crm_access_accounts a ON a.bound_user_id=u.id
+      LEFT JOIN auth_mfa_factors f ON f.user_id=u.id WHERE u.id=$1 OR a.id IS NOT NULL`, [owner.userId]);
     return {
-      companyName: data.settings.companyName,
+      companyName: settings.companyName,
       access,
-      team: data.team,
-      events: result.rows.map(row => ({ ...row, at: row.at.toISOString() })),
+      team,
+      events: result.rows.map(({at,reason,...row})=>({...row,at:at.toISOString(),...(reason?{reason}:{})})),
+      mfa:{available:mfaAvailable(),required:mfaRequired('owner'),ownerEnabled:mfa.rows.some(item=>item.owner&&item.enabled),
+        enabledAccountIds:mfa.rows.flatMap(item=>item.account_id&&item.enabled?[item.account_id]:[]),
+        pendingAccountIds:mfa.rows.flatMap(item=>item.account_id&&item.pending?[item.account_id]:[])},
     };
   });
 }
 
-async function liveWorkspace(access:AccessContext,client:PoolClient):Promise<{data:Workspace;revision:number}> {
-  let row=(await client.query<Stored>("SELECT * FROM crm_workspaces WHERE id='smee:live' FOR UPDATE")).rows[0];
-  if (!row) {
-    await client.query("INSERT INTO crm_workspaces (id,owner_id,owner_email,data,revision,updated_at) VALUES ('smee:live',$1,$2,$3,0,$4) ON CONFLICT(id) DO NOTHING",[access.ownerId,access.ownerEmail,JSON.stringify(createWorkspace('live')),new Date().toISOString()]);
-    row=(await client.query<Stored>("SELECT * FROM crm_workspaces WHERE id='smee:live' FOR UPDATE")).rows[0];
-  }
-  check(row && row.owner_id===access.ownerId,'Không thể mở không gian làm việc của công ty.',403);
-  return {data:JSON.parse(row.data) as Workspace,revision:row.revision};
-}
-
-export async function mutateAccess(identity:CRMIdentity,command:AccessCommand):Promise<AccessResponse> {
+export async function mutateAccess(identity:CRMIdentity,command:AccessCommand,{requireOffboarding=false}={}):Promise<AccessResponse> {
   try {
     return await withTransaction(async client=>{
       const access=await requireOwner(identity,client);
@@ -149,19 +161,36 @@ export async function mutateAccess(identity:CRMIdentity,command:AccessCommand):P
       if (command.id!==undefined) check(typeof command.id==='string' && command.id.length>0 && command.id.length<=100,'Mã tài khoản không hợp lệ.');
       const existing=command.id ? (await client.query<AccountRow>('SELECT * FROM crm_access_accounts WHERE id=$1 FOR UPDATE',[command.id])).rows[0] : undefined;
       if (command.id) check(existing,'Không tìm thấy tài khoản.',404);
+      if (requireOffboarding && existing?.active===1 && command.active===false) {
+        throw new CRMError('Dùng thao tác Khóa để xác nhận mật khẩu và rà soát việc tồn.',400);
+      }
       if (command.action==='set_status') check(existing && typeof command.active==='boolean','Chọn tài khoản và trạng thái hợp lệ.');
       const statusOnly=command.action==='set_status';
       const email=cleanEmail(statusOnly ? existing?.email : (command.email??existing?.email));
-      const teamId=statusOnly ? existing?.team_member_id : (command.teamMemberId??existing?.team_member_id);
+      let teamId=statusOnly ? existing?.team_member_id : (command.teamMemberId??existing?.team_member_id);
       const role=statusOnly ? existing?.role : (command.role??existing?.role);
       check(email.length<=254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email),'Email nhân viên không hợp lệ.');
       check(email!==cleanEmail(access.ownerEmail),'Quyền chủ sở hữu được giữ cố định, không tạo thành tài khoản nhân viên.');
-      check(typeof teamId==='string' && teamId.length>0,'Chọn nhân sự trong không gian Làm việc thật.');
       check(role && roles.has(role),'Vai trò không hợp lệ.');
       if (command.active!==undefined) check(typeof command.active==='boolean','Trạng thái tài khoản không hợp lệ.');
       if (existing?.bound_user_id) check(email===existing.email,'Email đã liên kết danh tính không thể thay đổi.');
-      const live=await liveWorkspace(access,client);
-      check(live.data.team.some(member=>member.id===teamId),'Nhân sự phải có trong không gian Làm việc thật.');
+      const workspace=await getWorkspaceRow(client,'live',access,true);
+      if (command.newMember !== undefined) {
+        check(!statusOnly && !existing && teamId===undefined,'Chỉ tạo nhân sự mới khi thêm tài khoản.');
+        const {newMember} = command;
+        check(newMember && typeof newMember.name==='string' && newMember.name.trim().length>0 && newMember.name.length<=100,'Tên nhân sự cần từ 1 đến 100 ký tự.');
+        check(typeof newMember.jobTitle==='string' && newMember.jobTitle.trim().length>0 && newMember.jobTitle.length<=100,'Chức danh cần từ 1 đến 100 ký tự.');
+        const data=await readWorkspaceRecords(client,workspace.id);
+        check(!data.team.some(member=>cleanEmail(member.email)===email),'Email đã có trong danh bạ. Hãy chọn nhân sự có sẵn.');
+        const withMember = applyCommand(data, {action:'create',collection:'team',expectedRevision:workspace.revision,
+          data:{name:newMember.name.trim(),role:newMember.jobTitle.trim(),email}}, identity.displayName);
+        teamId = withMember.team.at(-1)!.id;
+        await saveWorkspaceRecords(client,workspace,data,withMember);
+      }
+      check(typeof teamId==='string' && teamId.length>0,'Chọn nhân sự trong không gian Làm việc thật.');
+      check(teamId !== 'member-admin' || existing?.team_member_id === teamId,'Hồ sơ chủ sở hữu không dùng để cấp tài khoản nhân viên.');
+      const teamMember=await client.query('SELECT id FROM crm_team WHERE workspace_id=$1 AND id=$2',[workspace.id,teamId]);
+      check(teamMember.rowCount,'Nhân sự phải có trong không gian Làm việc thật.');
       const duplicate=(await client.query<{id:string}>('SELECT id FROM crm_access_accounts WHERE (email=$1 OR team_member_id=$2) AND id<>$3 LIMIT 1',[email,teamId,existing?.id || ''])).rows[0];
       check(!duplicate,'Email hoặc nhân sự đã có tài khoản.');
       const id=existing?.id || randomUUID(),now=new Date().toISOString();

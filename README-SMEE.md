@@ -8,8 +8,8 @@ Hướng dẫn cài máy chủ, tạo tài khoản chủ sở hữu và trỏ do
 
 1. Mở domain CRM tại `/login` và đăng nhập bằng email/mật khẩu riêng của CRM. Không có tài khoản mặc định hoặc đăng ký công khai.
 2. Chủ sở hữu có quyền toàn hệ thống. Nhân viên chỉ đăng nhập sau khi được cấp quyền, liên kết với nhân sự và đặt mật khẩu bằng link do chủ sở hữu tạo.
-3. **Dữ liệu mẫu** dành cho chủ sở hữu thử quy trình. Công ty, người liên hệ, email và số tiền ở đây đều giả lập. Số `+1 202-555-01xx` và email/website `example.com` là dữ liệu minh họa, không dùng để liên hệ thật.
-4. Trình duyệt mới mở **Dữ liệu công ty**. CRM ghi nhớ lựa chọn của chủ sở hữu nếu đã chuyển sang **Dữ liệu mẫu**. Kiểm tra nhãn không gian trước khi nhập khách. Nhân viên làm việc trong dữ liệu công ty.
+3. Trang CRM mặc định mở **Dữ liệu công ty**. Tùy chọn **Dữ liệu mẫu** chỉ xuất hiện khi quản trị máy chủ bật `SMEE_ENABLE_DEMO=true` trên môi trường thử riêng.
+4. Đối chiếu thông tin và trạng thái trước khi nhập khách hàng mới.
 5. Kiểm tra thông tin công ty, danh bạ, dịch vụ, giá và phạm vi bàn giao trong Cài đặt trước khi vận hành.
 
 ## Tài khoản và phân quyền
@@ -22,18 +22,21 @@ Danh bạ nhân sự dùng để phân công. Tài khoản đăng nhập là đ�
 | Quản lý | Quản lý khách, cơ hội, dự án, phân công và tệp. Được xem sổ thu tiền. Quyền ghi phiếu, sửa trị giá hợp đồng đã mở sổ, quản trị tài khoản và xuất bản sao JSON đầy đủ thuộc chủ sở hữu. |
 | Sale / Account | Thêm khách tự khai thác, cập nhật hồ sơ khách mình phụ trách và theo dõi lịch chăm sóc, công việc, cơ hội liên quan. |
 | Telesales | Thêm khách tự khai thác vào danh sách gọi của mình, cập nhật hồ sơ thuộc danh sách này và ghi kết quả chăm sóc. |
+| Triển khai | Xem thông tin dự án được giao, cập nhật công việc và nội dung của mình, báo và xử lý vướng mắc. Dự án chỉ hiển thị thông tin cần triển khai. |
 
 Quyền được kiểm tra ở máy chủ cho từng yêu cầu. Nhân viên chỉ nhập Excel cho khách tự khai thác của chính mình; không tự đổi người phụ trách, tự chuyển khách hoặc cấp quyền hệ thống. Dữ liệu dự án, nội dung và kho tài liệu toàn công ty không được gửi xuống tài khoản account/telesales.
 
 Để cấp tài khoản:
 
-1. Trong **Dữ liệu công ty → Cài đặt**, tạo nhân sự trong danh bạ.
-2. Mở **Quản trị** ở thanh bên hoặc truy cập `/admin` bằng tài khoản chủ sở hữu. Trong mục **Tài khoản**, chọn **Cấp quyền tài khoản**, điền email, chọn nhân sự liên kết và vai trò. Trang quản trị luôn thao tác trên dữ liệu công ty, kể cả khi vừa xem không gian mẫu.
+1. Mở **Quản trị** ở thanh bên hoặc truy cập `/admin` bằng tài khoản chủ sở hữu. Trong mục **Tài khoản**, chọn **Thêm người dùng**.
+2. Chọn nhân sự có sẵn hoặc tạo nhân sự mới trong biểu mẫu. Nhập email đăng nhập, chọn quyền CRM rồi bấm **Tạo người dùng**. Chức danh trong danh bạ dùng để phân công công việc.
 3. Sau khi lưu, bấm **Đặt mật khẩu** để tạo link dùng một lần, hiệu lực **1 giờ**.
 4. Chuyển link qua kênh riêng đã xác minh với đúng nhân viên. App **không gửi email/SMTP tự động**.
 5. Nhân viên đặt mật khẩu, sau đó đăng nhập tại `/login`.
 
 Trên trang quản trị, chủ sở hữu có thể tìm theo tên, email hoặc vai trò, lọc theo trạng thái và xem lịch sử thay đổi quyền truy cập.
+
+Để giao việc triển khai, tạo và kích hoạt tài khoản có quyền **Triển khai**. Chủ sở hữu hoặc Quản lý mở một dự án, bấm **Nhóm triển khai** và chọn người tham gia. Giao riêng từng công việc, nội dung hoặc vướng mắc bằng ô phụ trách. Nhân sự cũng thấy thông tin dự án khi được giao trực tiếp một mục. Họ có thể ghi tiến độ, giờ làm, kết quả, sửa bản nội dung, báo mục sẵn sàng đăng và mở tài liệu đã gắn vào nội dung của mình. Quản lý ghi nhận việc đăng và nghiệm thu.
 
 Tạo link mới sẽ thay thế link chưa dùng trước đó. Hoàn tất đặt lại mật khẩu sẽ thu hồi các phiên đăng nhập cũ. Khóa tài khoản có hiệu lực ở các yêu cầu tiếp theo; chuyển khách sang người khác cập nhật ngay phạm vi được phép. Phiên đăng nhập có thời hạn 8 giờ.
 
@@ -52,6 +55,8 @@ Chọn bộ lọc **Tự khai thác** để xem các khách bạn đã tìm và 
 
 Tìm kiếm/lọc theo trạng thái, account, telesales, nguồn, mức ưu tiên, lịch chăm sóc và nhãn. Các nhóm quá hẹn/hôm nay/chưa hẹn giúp chọn khách cần xử lý trước. Có thể chọn cả danh sách theo bộ lọc để thao tác hàng loạt trong giới hạn được hiển thị.
 
+Danh sách quản lý trong **Dữ liệu công ty** hiển thị 25 khách mỗi trang và giữ mục đã chọn khi chuyển trang. Bộ lọc, tìm kiếm và **Chọn toàn bộ** áp dụng cho các trang khớp điều kiện. Bấm tên khách để tải hồ sơ và lịch sử. **Xuất danh sách** lấy các dòng đã chọn hoặc kết quả đang lọc nếu chưa chọn khách.
+
 Mỗi hồ sơ gồm:
 
 - Công ty/tên khách, đầu mối, chức danh, ngành, địa chỉ, website, số điện thoại/email chính và bổ sung.
@@ -61,6 +66,8 @@ Mỗi hồ sơ gồm:
 - Nhật ký trao đổi, lịch sử cập nhật, cơ hội và dự án liên quan theo quyền của người xem.
 
 Trạng thái chính: **Mới → Đang liên hệ → Đang tư vấn → Đang hợp tác**, cùng **Tạm ngừng/Không phù hợp** khi cần. Tóm tắt hồ sơ lấy từ dữ liệu đã lưu, không tự suy diễn bằng AI.
+
+Khi bàn giao khách, các việc đang chờ của người phụ trách cũ được chuyển cùng hồ sơ. Nếu người nhận không có quyền xem hồ sơ hoặc chưa kích hoạt tài khoản, CRM yêu cầu chọn người nhận phù hợp trước khi lưu. Các việc đã hoàn thành hoặc đã hủy giữ nguyên người xử lý.
 
 Lịch chăm sóc chung và các công việc/cuộc hẹn có lịch riêng; khi ghi kết quả, kiểm tra việc tiếp theo và ngày gọi lại để không bỏ sót khách. Cuộc hẹn trong CRM chưa tạo sự kiện Google/Outlook hoặc gửi lời mời.
 
@@ -108,17 +115,27 @@ Sau cuộc gọi, ghi kết quả, nội dung và việc tiếp theo:
 
 - **Không nghe máy/Máy bận:** chuyển sang đang chăm sóc và cần ngày liên hệ tiếp theo.
 - **Hẹn gọi lại:** ghi lịch hẹn mới.
-- **Quan tâm/Đặt lịch tư vấn:** chuyển sang đủ điều kiện để quản lý tiếp tục tạo cơ hội.
+- **Quan tâm/Đặt lịch tư vấn.** Chuyển khách sang **Đủ điều kiện** để gửi cho Sale.
 - **Không phù hợp/Sai số:** kết thúc lượt chăm sóc hiện tại và bỏ lịch gọi lại.
 
 Mở liên kết gọi không tự tăng số lần gọi; chỉ ghi nhận khi người dùng lưu kết quả. App không tự gửi ghi chú cho khách hoặc nhân viên qua kênh ngoài.
 
+## Bàn giao từ Telesales sang Sale
+
+1. Ở hồ sơ đủ điều kiện, Telesales chọn **Gửi sang Sale**, chọn tài khoản Sale/Account đã kích hoạt, đặt hạn tiếp nhận và tóm tắt nhu cầu. Quản lý có thể gửi từ **Đội telesales → Đủ điều kiện**.
+2. Sale mở **Khách chờ tiếp nhận** để đọc tóm tắt và hạn. Chọn **Nhận khách** để mở hồ sơ, hoặc **Trả lại** kèm lý do để Telesales bổ sung và gửi lại.
+3. Khi Sale nhận, CRM chuyển hồ sơ, việc còn mở của người phụ trách trước và của Telesales, cùng các cơ hội còn mở của người phụ trách trước. Lịch chăm sóc, lịch sử liên hệ và người đã hoàn thành từng việc được giữ. Sale có thể tạo cơ hội từ hồ sơ vừa nhận.
+4. Theo dõi yêu cầu đang chờ, quá hạn hoặc kết quả gần nhất tại **Bàn giao sang Sale**. Telesales đã gửi hoặc Quản lý có thể hủy một đề nghị đang chờ với lý do rồi gửi lại cho người khác. Các lần gửi và xử lý được ghi vào lịch sử hồ sơ.
+
 ## Bán hàng và triển khai
 
-- **Cơ hội:** tên, dịch vụ, giá trị, xác suất, giai đoạn, người phụ trách, ngày dự kiến chốt và việc tiếp theo. Xác suất là đánh giá của người dùng. Chốt thành công tạo dự án liên kết.
-- **Báo giá:** xem ở `/quotes/<deal-id>?mode=live` và in/lưu PDF. Cần rà soát giá, phạm vi, thuế và điều khoản trước khi gửi; đây chưa phải cơ chế ký hợp đồng/thanh toán.
-- **Dự án:** phạm vi, ngân sách, deadline, công việc, người thực hiện, giờ công, chi phí và vướng mắc.
-- **Nội dung:** Ý tưởng → Đang sản xuất → Sẵn sàng đăng → Đã đăng. Không có quy trình duyệt hoặc tạo yêu cầu phát sinh.
+- **Cơ hội.** Sale/Account mở hồ sơ khách được giao và chọn **Thêm cơ hội**. Nhập nhu cầu, giá trị dự kiến, ngày dự kiến chốt và việc tiếp theo. Khi đóng thua, ghi lý do để thuận tiện rà soát.
+- **Báo giá.** Mở cơ hội, chọn **Lập báo giá**, thêm hạng mục và ghi phạm vi, thời hạn, điều khoản. CRM trừ chiết khấu bằng đồng trước khi tính thuế theo thuế suất nhập. Chọn **Lưu bản nháp** rồi **Trình duyệt báo giá**. Quản lý hoặc Chủ sở hữu mở **Bán hàng → Chờ duyệt** để xem chi tiết và xử lý. Bản đã duyệt có nút **Xem / in báo giá**. Mọi chỉnh sửa sau khi trình duyệt được lưu thành phiên bản kế tiếp.
+- **Chốt thắng.** Sale chọn **Đề nghị chốt thắng** từ báo giá mới nhất đã duyệt còn hiệu lực và ghi căn cứ thỏa thuận. Quản lý hoặc Chủ sở hữu điền số hợp đồng hoặc mã xác nhận trong hàng chờ. CRM tạo dự án theo phạm vi và tổng tiền của báo giá đó, gán người xác nhận làm người phụ trách ban đầu và cho phép mở dự án ngay từ cơ hội. Phần ký kết được thực hiện ngoài CRM.
+- **Điều chỉnh hợp đồng.** Từ cơ hội đã chốt hoặc **Dự án → Xem hợp đồng**, nhập giá trị, phạm vi và lý do thay đổi. Quản lý hoặc Chủ sở hữu xử lý ở **Chờ duyệt**. Giá trị mới cần ít nhất bằng số đã thu và lịch sử giữ nguyên giá trị khi ký. Dự án đã hoàn tất cần được mở lại trước khi điều chỉnh. Luồng này áp dụng cho hợp đồng xác nhận qua báo giá có phiên bản.
+- **Theo dõi dự án.** Sale/Account mở tab **Dự án** trong hồ sơ khách phụ trách để xem trạng thái, hạn, tiến độ và ngày nghiệm thu. Quản lý mở chi tiết dự án để phân công, theo dõi giờ công và chi phí.
+- **Duyệt nội dung.** Chủ sở hữu có thể bật **Bắt buộc duyệt nội dung trước khi đăng** trong **Cài đặt không gian → Sửa thông tin**. Sau khi Triển khai bấm **Gửi duyệt**, Quản lý hoặc Chủ sở hữu mở **Kế hoạch nội dung → Chờ duyệt**, xem phiên bản và ghi căn cứ duyệt hoặc lý do trả lại. Mỗi phiên bản có lần duyệt riêng. Khi để chế độ tùy chọn, Quản lý có thể ghi nhận đã đăng trực tiếp.
+- **Nghiệm thu.** Chọn **Nghiệm thu dự án** và ghi căn cứ bàn giao. CRM kiểm tra công việc, nội dung và vướng mắc còn mở. Chủ sở hữu có thể nghiệm thu ngoại lệ với lý do, số mục còn mở và dấu thời gian. Việc nghiệm thu giữ số dư công nợ. Nếu cần sửa việc sau nghiệm thu, chọn **Mở lại dự án** và ghi lý do để lưu lại lần nghiệm thu trước trong nhật ký.
 - **Báo cáo:** tổng hợp bản ghi trong không gian đang mở; cần nhập đúng giờ công và chi phí để đánh giá hiệu quả.
 
 ## Tổng quan dành cho chủ doanh nghiệp
@@ -129,11 +146,12 @@ Biểu đồ **Nhịp độ kinh doanh** gom dự án theo tháng bắt đầu. 
 
 ## Thu tiền và đối chiếu hợp đồng
 
-1. Vào **Thu tiền & công nợ**, lọc **Chưa đối chiếu** và mở một hợp đồng.
-2. Chọn **Mở sổ thu tiền**. Đối chiếu chứng từ, nhập số tiền thực tế đã nhận trước đó (có thể bằng 0) và hạn thanh toán phần còn lại nếu đã thỏa thuận. CRM chỉ tổng hợp các hợp đồng đã mở sổ.
-3. Khi nhận thêm tiền, chọn **Ghi phiếu thu**, nhập số tiền, ngày nhận cùng mã phiếu hoặc mã giao dịch. Số còn phải thu bằng giá trị hợp đồng trừ số đầu kỳ và các phiếu còn hiệu lực.
-4. Chủ sở hữu có thể hủy một phiếu hoặc điều chỉnh số đầu kỳ, kèm lý do. Mở lại lịch sử hợp đồng để xem người và thời điểm điều chỉnh. **Quá hạn thanh toán** chỉ tính phần còn nợ đã có hạn trước hôm nay. **Còn nợ chưa có hạn** giúp rà các hợp đồng còn thiếu ngày hẹn.
-5. Vào **Báo cáo → Xuất báo cáo dự án** để tải CSV có giá trị hợp đồng, tiền đã thu, số còn phải thu và hạn thanh toán. Hợp đồng chưa đối chiếu có nhãn riêng và để trống các cột tiền thu/nợ.
+1. Với dự án đã có trước luồng duyệt báo giá, Chủ sở hữu mở **Thu tiền & công nợ → Chưa xác nhận hợp đồng**. Chọn **Xác nhận hợp đồng cũ**, nhập số hợp đồng hoặc mã đối chiếu, ngày ký hoặc xác nhận, giá trị đang áp dụng và căn cứ từ hồ sơ nội bộ. Sổ đã mở tiếp tục giữ số đầu kỳ, phiếu, hạn và lịch sử. Hợp đồng xác nhận qua báo giá đã có mã riêng khi chốt thắng.
+2. Chủ sở hữu chọn **Mở sổ thu tiền** cho hợp đồng đã xác nhận. Nhập số đã thu theo chứng từ trước thời điểm mở sổ, kể cả 0 nếu chưa thu, rồi nhập hạn thanh toán nếu đã thỏa thuận. Tổng công nợ lấy từ hợp đồng đã xác nhận và đã mở sổ.
+3. Cấp quyền **Tài chính** trong Quản trị. Tài khoản này vào thẳng sổ thu khi đăng nhập. Tài chính hoặc Chủ sở hữu chọn **Ghi phiếu thu**, nhập số tiền, ngày nhận cùng mã phiếu hoặc mã giao dịch. Mỗi dự án dùng một mã duy nhất cho các phiếu còn hiệu lực. Số còn phải thu bằng giá trị hợp đồng trừ số đầu kỳ và các phiếu còn hiệu lực.
+4. Từ phiếu hoặc số đầu kỳ, chọn **Đề nghị xử lý** và ghi lý do. Chủ sở hữu lọc **Có đề nghị chờ xử lý** để xác nhận hoặc trả lại. CRM tính lại số đã thu tại lúc xác nhận. Khi sửa số tiền, hệ thống giữ phiếu cũ ở trạng thái đã hủy và tạo bản thay thế.
+5. Chủ sở hữu hoặc Quản lý có thể đề nghị sửa giá trị và phạm vi của hợp đồng cũ đã đối chiếu. Người xử lý xác nhận trên cùng màn hình. Giá trị sau điều chỉnh phải bao phủ số đã thu và giá trị lúc đối chiếu được giữ trong lịch sử.
+6. **Báo cáo → Xuất CSV** có mã hợp đồng, trạng thái xác nhận, giá trị dự án, chi phí, tiền đã thu và phải thu. Dòng chưa đủ điều kiện tổng hợp để trống số thu và nợ. **Quá hạn thanh toán** áp dụng cho khoản còn nợ có hạn trước hôm nay.
 
 ## Tệp và dữ liệu
 
@@ -141,7 +159,7 @@ Chủ sở hữu/quản lý tải tệp tối đa **10 MB**. Máy chủ kiểm t
 
 CSV khách hàng chứa dữ liệu người xuất được phép xem. Endpoint JSON `/api/export?mode=live` dành cho chủ sở hữu, xuất nghiệp vụ của không gian cùng revision; **không thay thế backup đầy đủ** vì không gồm toàn bộ bảng tài khoản và byte tệp.
 
-Mỗi không gian đang lưu theo snapshot JSON, giới hạn **1.800.000 byte (1,8 MB)** gồm bản ghi và lịch sử. Chủ sở hữu xem dung lượng tại **Cài đặt → Dữ liệu & kết nối**. Từ 80%, CRM hiển thị cảnh báo. Tệp đính kèm dùng bộ nhớ riêng. Lần ghi vượt giới hạn sẽ bị từ chối. Với khối lượng lớn, cần tách dữ liệu thành các bảng nghiệp vụ và thử tải trước khi mở rộng.
+Khách hàng, cơ hội, dự án, lịch sử và phiếu thu được lưu trong các bảng PostgreSQL riêng. Khi hai người sửa hai hồ sơ khác nhau, CRM có thể lưu cả hai thay đổi. Cập nhật cùng hồ sơ vẫn cần đối chiếu khi có thay đổi mới, còn nhập Excel và thao tác hàng loạt cần xác nhận trên phiên bản danh sách hiện hành. Kiểm tra tải với dữ liệu công ty trước khi mở rộng số người dùng.
 
 Dùng `deploy/backup.sh` và đọc phần khôi phục trong README-VPS để giữ đủ database và tệp. Database mới độc lập; gói source không tự nhập dữ liệu công ty đã có ở hệ thống khác.
 

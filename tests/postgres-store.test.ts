@@ -31,7 +31,7 @@ test('PostgreSQL persistence: isolation, revisions, atomic imports and access re
         await query(await readFile(resolve('migrations',file),'utf8'));
       }
     }
-    await query('TRUNCATE crm_access_accounts,crm_access_control,crm_access_audit,crm_workspaces,auth_users CASCADE');
+    await query('TRUNCATE crm_mutation_requests,crm_access_accounts,crm_access_control,crm_access_audit,crm_workspaces,auth_users CASCADE');
     let current:CRMResponse;
     let memberA='',memberB='',accountA='',accountB='';
     let customerA='',customerB='',customerC='';
@@ -104,6 +104,31 @@ test('PostgreSQL persistence: isolation, revisions, atomic imports and access re
       current=await loadWorkspace('live',owner);
       assert.equal(current.revision,revision+1);
     });
+    await t.test('two edits from one revision can update different customers, but a stale edit to the same customer conflicts',async()=>{
+      const start=current.revision;
+      const edit=(id:string, name:string)=>mutateWorkspace('live',owner,{action:'update',collection:'customers',id,data:{name},expectedRevision:start});
+      await Promise.all([edit(customerA,'Concurrent customer A'),edit(customerB,'Concurrent customer B')]);
+      await assert.rejects(edit(customerA,'Stale change'),expectStatus(409));
+      current=await loadWorkspace('live',owner);
+      assert.equal(current.revision,start+2);
+      assert.equal(current.data.customers.find(customer=>customer.id===customerA)?.name,'Concurrent customer A');
+      assert.equal(current.data.customers.find(customer=>customer.id===customerB)?.name,'Concurrent customer B');
+    });
+    await t.test('customer work cannot be assigned outside visibility and follows the new account owner', async () => {
+      let access = await getAccessResponse(owner);
+      access = await mutateAccess(owner,{action:'upsert',id:accountA,role:'account',expectedRevision:access.revision!});
+      const work = {title:'Gọi xác nhận',type:'Cuộc gọi',dueDate:'2030-01-15',owner:memberA};
+      await assert.rejects(command('upsert_customer_action',work,{id:customerC}),/quyền xem hồ sơ/);
+      assert.equal((await loadWorkspace('live',owner)).revision,current.revision);
+      await command('upsert_customer_action',{...work,owner:'member-admin'},{id:customerC});
+      const actionId=current.data.customers.find(customer=>customer.id===customerC)!.actions![0].id;
+      await command('handoff_customer',{owner:memberA,note:'Chuyển hồ sơ và việc gọi'},{id:customerC});
+      const recipient=(await loadWorkspace('live',teleA)).data.customers.find(customer=>customer.id===customerC);
+      assert.equal(recipient?.actions?.find(action=>action.id===actionId)?.owner,memberA);
+      assert.ok(current.data.activities.some(event=>event.kind==='reassign_customer_action' && event.entityId===customerC));
+      await command('handoff_customer',{owner:'member-admin',note:'Hoàn lại hồ sơ'},{id:customerC});
+      await mutateAccess(owner,{action:'upsert',id:accountA,role:'telesales',expectedRevision:access.revision!});
+    });
     await t.test('account disable revokes sessions, denies access and excludes recipients',async()=>{
       for (const identity of [teleA,teleB]) {
         await query('INSERT INTO auth_users (id,email,display_name,password_hash) VALUES ($1,$2,$3,$4)',[identity.userId,identity.email,identity.displayName,'fixture-not-a-valid-password-hash']);
@@ -146,6 +171,7 @@ test('PostgreSQL persistence: isolation, revisions, atomic imports and access re
       const salesId=current.data.team.find(member=>member.email===sales.email)!.id;
       const access=await getAccessResponse(owner);
       await mutateAccess(owner,{action:'upsert',email:sales.email,teamMemberId:salesId,role:'account',active:true,expectedRevision:access.revision!});
+      assert.equal((await getAccess(sales)).memberId,salesId);
       const before=await loadWorkspace('live',sales);
       assert.equal(before.data.customers.length,0);
       const create:Command={action:'create_prospect',expectedRevision:before.revision,data:{name:'Khách do Sale tìm',phone:'0901234876',source:'Giới thiệu'}};
@@ -265,6 +291,7 @@ test('PostgreSQL persistence: isolation, revisions, atomic imports and access re
       await command('create',{name:'Hợp đồng đối soát',customerId:customerA,serviceId:current.data.services[0].id,owner:'member-admin',budget:1000000,scope:'Hạng mục hợp đồng'}, {collection:'projects'});
       const id=current.data.projects[0].id;
       const today=businessDate();
+      await command('confirm_legacy_contract',{number:'QA-HD-01',signedOn:today,budget:1000000,evidence:'Căn cứ trong hồ sơ đối soát'},{id});
       await command('open_project_ledger',{openingAmount:300000,paymentDue:today},{id});
       const write:Command={action:'record_project_receipt',id,data:{amount:200000,date:today,reference:'QA-01'},expectedRevision:current.revision};
       const saved=await mutateWorkspace('live',owner,write);
@@ -274,12 +301,14 @@ test('PostgreSQL persistence: isolation, revisions, atomic imports and access re
       assert.deepEqual(projectBalance(current.data.projects[0],today),{paid:500000,outstanding:500000,overdue:false});
       const receipt=current.data.projects[0].ledger!.receipts.find(r=>r.reference==='QA-01')!;
       const reason='Sai mã hợp đồng';
-      await command('void_project_receipt',{receiptId:receipt.id,reason},{id});
+      await command('request_receipt_correction',{receiptId:receipt.id,kind:'void',reason},{id});
+      const correctionId=current.data.projects[0].ledger!.corrections![0].id;
+      await command('review_receipt_correction',{correctionId,decision:'approved'},{id});
       current=await loadWorkspace('live',owner);
       const ledger=current.data.projects[0].ledger!;
       assert.equal(ledger.receipts.find(r=>r.id===receipt.id)?.voided?.reason,reason);
       assert.equal(projectBalance(current.data.projects[0],today)?.paid,300000);
-      assert.ok(current.data.activities.some(event=>event.kind==='void_project_receipt' && event.actor===owner.displayName));
+      assert.ok(current.data.activities.some(event=>event.kind==='review_receipt_correction' && event.actor===owner.displayName));
       const staff=await loadWorkspace('live',sales);
       assert.equal(staff.data.projects.length,0);
       assert.equal(staff.data.activities.some(a=>a.kind==='record_project_receipt'),false);
@@ -291,11 +320,35 @@ test('PostgreSQL persistence: isolation, revisions, atomic imports and access re
       await assert.rejects(mutateWorkspace('live',teleA,{...write,expectedRevision:manager.revision}),expectStatus(403));
       const edit:Command={action:'update',collection:'projects',id,data:{budget:310000},expectedRevision:manager.revision};
       await assert.rejects(mutateWorkspace('live',teleA,edit),expectStatus(403));
-      await mutateWorkspace('live',teleA,{...edit,data:{budget:1000000,scope:'Phạm vi đã cập nhật'}});
+      await assert.rejects(mutateWorkspace('live',teleA,{...edit,data:{budget:1000000,scope:'Phạm vi đã cập nhật'}}),expectStatus(400));
+      const proposed=await mutateWorkspace('live',teleA,{action:'request_legacy_contract_change',id,expectedRevision:manager.revision,
+        data:{budget:900000,scope:'Phạm vi đã cập nhật',reason:'Theo phụ lục đã xác nhận'}});
+      const changeId=proposed.data.projects[0].legacyContractChanges?.[0].id;
       current=await loadWorkspace('live',owner);
-      await command('update',{budget:900000},{id,collection:'projects'});
+      await command('review_legacy_contract_change',{changeId,decision:'approved'},{id});
       assert.deepEqual(current.data.activities[0].details?.budget,{before:1000000,after:900000});
       assert.equal(projectBalance(current.data.projects[0],today)?.outstanding,600000);
+    });
+    await t.test('retrying an import with the same request ID never imports a second batch', async () => {
+      current=await loadWorkspace('live',owner);
+      const request:Command={action:'import_customers',requestId:randomUUID(),expectedRevision:current.revision,
+        data:{owner:'member-admin',sourceFile:'retry.xlsx',rows:[{name:'Imported once',phone:'0912345670'}]}};
+      const responses=await Promise.all([mutateWorkspace('live',owner,request),mutateWorkspace('live',owner,request)]);
+      assert.equal(responses[0].revision,current.revision+1);
+      assert.equal(responses[1].revision,responses[0].revision);
+      assert.equal(responses[1].data.customers.filter(customer=>customer.name==='Imported once').length,1);
+      await assert.rejects(mutateWorkspace('live',owner,{...request,data:{...request.data,sourceFile:'changed.xlsx'}}),/đã dùng/);
+    });
+    await t.test('workspace continues to save and reload above 1.8 MB without updating the archive', async () => {
+      current=await loadWorkspace('live',owner);
+      const start=current.revision;
+      for (let i=0;i<36;i++) await command('add_customer_note',{body:String(i).padStart(2,'0')+'x'.repeat(28_000)},{id:customerA});
+      const reloaded=await loadWorkspace('live',owner);
+      assert.ok(Buffer.byteLength(JSON.stringify(reloaded.data),'utf8')>1_800_000);
+      assert.equal(reloaded.revision,start+36);
+      assert.equal(reloaded.data.customers.find(customer=>customer.id===customerA)?.notesLog?.[0].body.slice(0,2),'35');
+      const archive=(await query<{data:string}>("SELECT data FROM crm_workspaces WHERE id='smee:live'")).rows[0].data;
+      assert.equal(archive,'{}');
     });
   } finally {
     await pool.end();

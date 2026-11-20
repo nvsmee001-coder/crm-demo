@@ -1,0 +1,20 @@
+.workflow { margin: 16px 0; display: grid; gap: 10px; color: var(--text, #29282f); min-width: 0; }
+.workflow p, .workflow small { white-space: pre-wrap; overflow-wrap: anywhere; }
+.workflow p { margin: 0; }
+.heading, .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.heading { justify-content: space-between; }
+.heading h2, .heading h3, .form h4 { margin: 0; }
+.rows { display: grid; gap: 6px; padding: 0; margin: 0; list-style: none; }
+.rows li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; }
+.rows li, .record, .form { border: 1px solid var(--line, #e6e5ea); border-radius: 10px; padding: 12px; }
+.rows small { display: block; }
+.rows .handoffRow { display: grid; gap: 10px; }
+.handoffRow p { margin-top: 6px; }
+.record, .form, .form fieldset, .form label { display: grid; gap: 8px; }
+.form label { font-size: 13px; font-weight: 600; }
+.form fieldset { border: 1px solid #e6e5ea; border-radius: 8px; min-width: 0; padding: 10px; }
+.form input, .form textarea, .form select { font: inherit; color: inherit; font-weight: 400; background: var(--white, #fff); border: 1px solid #dbd9e1; border-radius: 8px; padding: 8px 10px; width: 100%; min-width: 0; }
+.form textarea { resize: vertical; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.error { color: #b3231c; }
+@media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }

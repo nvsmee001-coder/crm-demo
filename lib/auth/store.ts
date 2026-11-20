@@ -2,31 +2,44 @@ import { randomUUID } from 'node:crypto';
 import { query, withTransaction } from '../database';
 import { getAccess } from '../access-store';
 import { hashPassword, isToken, newToken, normalizeEmail, passwordProblem, tokenHash, validEmail, verifyPassword } from './crypto';
+import { AuthError, MfaRequiredError } from './error';
+import { mfaRequired } from './mfa-crypto';
+import { consumeMfaCode, type MfaFactor } from './mfa-store';
 
-export class AuthError extends Error { constructor(message: string, public status = 400) { super(message); } }
+export { AuthError } from './error';
 export const LOGIN_ERROR = 'Email hoặc mật khẩu không đúng, hoặc tài khoản chưa được cấp quyền.';
 const DUMMY_HASH = `scrypt$65536$8$2$${'0'.repeat(64)}$${'0'.repeat(128)}`;
-type AuthUser = {id:string;email:string;display_name:string;password_hash:string;credential_version:number};
+type AuthUser = {id:string;email:string;display_name:string;password_hash:string;credential_version:number;mfa_pending_enrollment:boolean};
 const identity = (user: AuthUser) => ({userId:user.id,email:user.email,displayName:user.display_name});
-export async function loginPassword(emailInput: unknown, password: unknown): Promise<{token:string}> {
+export async function loginPassword(emailInput: unknown, password: unknown, code?: unknown) {
   const email=normalizeEmail(emailInput);
   if(!validEmail(email) || typeof password!=='string' || password.length>128)throw new AuthError(LOGIN_ERROR,401);
   const initial=(await query<AuthUser>('SELECT * FROM auth_users WHERE email=$1',[email])).rows[0];
   const verified=await verifyPassword(password,initial?.password_hash || DUMMY_HASH);
   if(!initial || !verified)throw new AuthError(LOGIN_ERROR,401);
   const token=newToken();
-  await withTransaction(async db=>{
-    try{await getAccess(identity(initial),db);}catch(error){if(error && typeof error==='object' && 'status' in error && (error.status===401||error.status===403))throw new AuthError(LOGIN_ERROR,401);throw error;}
+  const setupRequired=await withTransaction(async db=>{
+    let access;
+    try{access=await getAccess(identity(initial),db);}catch(error){if(error && typeof error==='object' && 'status' in error && (error.status===401||error.status===403))throw new AuthError(LOGIN_ERROR,401);throw error;}
     const current=(await db.query<AuthUser>('SELECT * FROM auth_users WHERE id=$1 FOR UPDATE',[initial.id])).rows[0];
     if(!current || current.password_hash!==initial.password_hash || current.credential_version!==initial.credential_version)throw new AuthError(LOGIN_ERROR,401);
+    const { rows:[factor] }=await db.query<MfaFactor>('SELECT encrypted_secret,last_step FROM auth_mfa_factors WHERE user_id=$1',[current.id]);
+    if (factor) {
+      if (code===undefined || code===null || code==='') throw new MfaRequiredError();
+      await consumeMfaCode(db,current.id,factor,code);
+    }
+    const setup=!factor && (current.mfa_pending_enrollment || mfaRequired(access.role));
     await db.query('DELETE FROM auth_sessions WHERE expires_at <= now()');
     await db.query("DELETE FROM auth_security_events WHERE id IN (SELECT id FROM auth_security_events WHERE created_at < now()-interval '90 days' ORDER BY id LIMIT 1000)");
     // Keep at most ten live sessions for an account; creating a session cannot grow without bound.
     await db.query('DELETE FROM auth_sessions WHERE token_hash IN (SELECT token_hash FROM auth_sessions WHERE user_id=$1 ORDER BY created_at DESC OFFSET 9)',[current.id]);
-    await db.query("INSERT INTO auth_sessions (token_hash,user_id,credential_version,expires_at) VALUES ($1,$2,$3,now()+interval '8 hours')",[tokenHash(token),current.id,current.credential_version]);
-    await db.query("INSERT INTO auth_security_events(event,user_id,actor_id) VALUES ('login',$1,$1)",[current.id]);
+    await db.query(`INSERT INTO auth_sessions (token_hash,user_id,credential_version,expires_at,mfa_setup_only,mfa_verified)
+      VALUES ($1,$2,$3,now()+CASE WHEN $4 THEN interval '10 minutes' ELSE interval '8 hours' END,$4,$5)`,
+      [tokenHash(token),current.id,current.credential_version,setup,!!factor]);
+    if (!setup) await db.query("INSERT INTO auth_security_events(event,user_id,actor_id) VALUES ('login',$1,$1)",[current.id]);
+    return setup;
   });
-  return{token};
+  return{token,setupRequired};
 }
 export async function logoutToken(token: unknown):Promise<void>{if(isToken(token))await query('DELETE FROM auth_sessions WHERE token_hash=$1',[tokenHash(token)]);}
 export async function issueSetupToken(accountId: unknown, actorId: string):Promise<string>{
@@ -59,9 +72,13 @@ export async function activatePassword(tokenInput: unknown,passwordInput: unknow
       await db.query('UPDATE auth_users SET password_hash=$1,credential_version=credential_version+1,updated_at=now() WHERE id=$2',[newHash,user.id]);
     }else{
       const id=randomUUID();
-      const created=await db.query<AuthUser>('INSERT INTO auth_users(id,email,display_name,password_hash) VALUES ($1,$2,$3,$4) RETURNING *',[id,token.email,token.email,newHash]);user=created.rows[0];
+      const member=(await db.query<{name: string}>("SELECT payload->>'name' AS name FROM crm_team WHERE workspace_id='smee:live' AND id=$1", [account.team_member_id])).rows[0];
+      if(!member)throw new AuthError('Nhân sự không còn trong danh bạ. Liên hệ chủ sở hữu.',409);
+      const created=await db.query<AuthUser>('INSERT INTO auth_users(id,email,display_name,password_hash) VALUES ($1,$2,$3,$4) RETURNING *',[id,token.email,member.name,newHash]);user=created.rows[0];
     }
-    await db.query('UPDATE crm_access_accounts SET bound_user_id=$1,version=version+1,updated_at=$3 WHERE id=$2',[user.id,account.id,new Date().toISOString()]);
+    const linkedAt=new Date().toISOString();
+    await db.query('UPDATE crm_access_accounts SET bound_user_id=$1,version=version+1,updated_at=$3 WHERE id=$2',[user.id,account.id,linkedAt]);
+    if (!account.bound_user_id) await db.query("UPDATE crm_access_control SET revision=revision+1,mutation_id=$1,updated_at=$2 WHERE id='company'",[randomUUID(),linkedAt]);
     await db.query('DELETE FROM auth_sessions WHERE user_id=$1',[user.id]);
     await db.query('DELETE FROM auth_setup_tokens WHERE crm_account_id=$1',[account.id]);
     await db.query("INSERT INTO auth_security_events(event,user_id,actor_id) VALUES ('password_activated',$1,$1)",[user.id]);

@@ -1,5 +1,79 @@
 # SMEE CRM VPS — báo cáo bàn giao và kiểm thử
 
+## Quản trị tài khoản
+
+- Build production đạt. PostgreSQL 17.12 chạy cục bộ đạt 32 kịch bản HTTP, 19 kiểm thử lưu nghiệp vụ và 12 kiểm thử xác thực. Bộ kiểm thử bảo mật đạt 18 ca. Migration 010 áp dụng được trên dữ liệu thử nâng cấp và chạy lại không thay đổi schema.
+- Edge chạy từ đăng nhập đến thiết lập bắt buộc, lưu mã khôi phục, mở bản xem trước bàn giao, chuyển khách, khóa tài khoản và kiểm tra nhật ký. Sau khi đăng xuất, đăng nhập lại bằng mã khôi phục. Bộ HTTP kiểm tra thêm tài khoản Tài chính, từ chối dùng lại mã, thu hồi phiên sau cấp lại thiết bị, bàn giao nhóm dự án và giữ lịch sử đã hoàn tất.
+- Diễn tập `pg_dump` và `pg_restore` giữ thiết bị MFA đã đăng ký. Quy trình khôi phục thu hồi phiên, liên kết đặt mật khẩu, thiết lập MFA dở dang và mã khôi phục đã lưu trong bản sao.
+
+## Kiểm thử luồng vận hành và khôi phục trên máy thử
+
+- Build production đạt. 30 kịch bản HTTP, 19 kiểm thử lưu nghiệp vụ và 12 kiểm thử xác thực đạt trên PostgreSQL 17.12 chạy cục bộ. 64 kiểm thử CRM, 9 kiểm thử Excel, 15 kiểm thử bảo mật và 3 kiểm thử migration bổ sung cũng đạt.
+- Edge chạy cùng một hồ sơ qua Telesales tiếp nhận và bàn giao, Sale lập báo giá, Quản lý duyệt/chốt, Triển khai hoàn thành việc và gửi nội dung, Quản lý duyệt rồi nghiệm thu, Tài chính ghi thu. Sale xem tiến độ và ngày nghiệm thu qua tab Dự án. Kịch bản HTTP kiểm tra quyền theo hồ sơ, khóa nội dung chưa duyệt, duyệt lại sau khi đổi phiên bản và lưu ngoại lệ nghiệm thu cùng công nợ.
+- Trên PostgreSQL 17.12, chạy thử migration hoàn tác, áp dụng migration 006–009 rồi chạy lại để xác nhận tính lặp an toàn. Công cụ đối chiếu khớp hai snapshot giả, tài khoản và phiếu thu cũ.
+- Dùng `pg_dump` và `pg_restore` trên bản sao giả vào một database riêng. Đối chiếu snapshot, số đầu kỳ, tài khoản và checksum tệp phục hồi. CLI thu hồi phiên đăng nhập và liên kết kích hoạt đã lưu trong bản sao.
+- Đo API với 10.000 khách và 100.000 hoạt động giả. Gộp truy vấn đếm kết quả và lấy trang giúp p95 tìm khách giảm từ 1.186 ms xuống 626 ms trong lượt đo 60 lần đọc từ 20 phiên. p95 của 10 lần cập nhật tuần tự trên các hồ sơ khác nhau là 841 ms. Các số này đo trên máy thử, cần đo lại trên VPS và tải sử dụng thực tế.
+- Edge với PostgreSQL 17.12 đã chạy lại phân trang khách, chọn qua nhiều trang, xuất CSV, tìm tiếng Việt, mở hồ sơ, nhập Excel và lưu quan hệ. Màn hình Khách hàng dùng API theo phạm vi danh sách cho đến khi chuyển sang màn hình tạo cơ hội.
+- `npm audit` trả về 0 cảnh báo tại lần kiểm tra này. Cấu hình Compose cho Caddy và Nginx hợp lệ. Phương án Nginx chỉ xuất cổng app trên loopback. Các script backup, restore và entrypoint qua kiểm tra cú pháp. Máy thử dùng PostgreSQL độc lập. Nghiệm thu Docker, mạng/TLS, ClamAV thật và sao lưu định kỳ ngoài VPS vẫn cần chạy trên môi trường triển khai.
+
+## Đối chiếu hợp đồng và quyền Tài chính
+
+- Build production, 64 kiểm thử CRM, 9 kiểm thử Excel, 19 kiểm thử lưu dữ liệu, 3 kiểm thử migration và 29 kịch bản HTTP đạt trên máy thử. Migration 009 giữ quyền hiện có và cho phép cấp vai trò Tài chính.
+- Kiểm thử mở lại dự án có sổ từ phiên bản cũ trước khi xác nhận hợp đồng. Sau xác nhận, số đầu kỳ, hạn và cả phiếu đã hủy được giữ nguyên. Vai trò Tài chính chỉ nhận mã hợp đồng, tên khách và dữ liệu sổ cần cho ghi thu.
+- Kiểm thử hai lượt ghi cạnh tranh cùng revision, gửi lại cùng mã yêu cầu, trùng mã chứng từ và số thu thay đổi khi đề nghị đang chờ. Chủ sở hữu xác nhận sửa phiếu trong một giao dịch, giữ bản cũ và cập nhật số dư.
+- Edge đã kiểm tra Chủ sở hữu xác nhận hợp đồng cũ và mở sổ, Tài chính ghi thu và đề nghị sửa ở màn hình rộng 390 px, Chủ sở hữu xác nhận và xuất CSV. Dòng hợp đồng đã đối chiếu khớp số thu và nợ, dòng chưa xác nhận để trống các cột tiền tương ứng.
+
+## Bàn giao từ Telesales sang Sale
+
+- Build production, 64 kiểm thử CRM, 9 kiểm thử Excel và 28 kịch bản HTTP đạt. Bộ HTTP kiểm tra tài khoản nhận đã kích hoạt, thời hạn, quyền hủy hoặc trả lại, hồ sơ cùng tệp riêng trước và sau khi chuyển, và hai lượt xác nhận cùng mã yêu cầu.
+- Khi Sale nhận khách, cơ sở dữ liệu lưu đồng thời người phụ trách mới, việc đang chờ, cơ hội đang mở và kết quả bàn giao. Kiểm thử đối chiếu lịch hẹn, nội dung cuộc gọi, người xử lý việc đã hoàn thành và nhật ký của các đề nghị trước.
+- Edge đã chạy từ lúc Telesales ghi kết quả **Đặt lịch tư vấn** đến lúc Sale trả lại, Telesales gửi lại và Sale tiếp nhận. Quản lý mở đề nghị từ hồ sơ khách. Sau khi nhận, Sale mở hồ sơ, xem lịch sử và mở biểu mẫu tạo cơ hội trên màn hình rộng 390 px.
+
+## Báo giá, chốt thắng và điều chỉnh hợp đồng
+
+- Build production đạt. Trên Edge, Sale dùng màn hình rộng 390 px để tạo cơ hội, lập và trình báo giá, mở bản in đã duyệt, đề nghị chốt và đề nghị điều chỉnh. Quản lý mở hàng chờ, xử lý từng bước, mở dự án và tra cứu hợp đồng liên kết.
+- 27 kịch bản HTTP đạt trên cơ sở dữ liệu thử nghiệm. Kịch bản bán hàng kiểm tra phạm vi khách của Sale, quyền duyệt, khóa bản in trước khi duyệt, lịch sử ba phiên bản, tổng tiền và bản in sau khi danh mục dịch vụ thay đổi. Hai yêu cầu xác nhận cùng mã chỉ tạo một hợp đồng và một dự án.
+- Kiểm tra sửa trực tiếp ngân sách hợp đồng, xác nhận đề nghị của chính mình và điều chỉnh giá trị xuống dưới số đã thu. Chủ sở hữu có thể xác nhận đề nghị của Quản lý và hệ thống giữ nguyên phiếu thu cùng giá trị lúc ký.
+- Các trường bổ sung lưu cùng bản ghi cơ hội và dự án trong PostgreSQL. Dữ liệu cũ đọc được theo cấu trúc hiện tại. Luồng điều chỉnh gắn với hợp đồng được xác nhận bằng quy trình mới.
+
+## Quyền Triển khai và phân công dự án
+
+- Build production đạt. Trên Edge, Chủ sở hữu tạo và kích hoạt tài khoản từ Admin, thêm người vào nhóm dự án rồi giao công việc. Nhân sự xem dự án, cập nhật giờ thực tế và kết quả, rồi báo vướng mắc ở màn hình rộng 390 px.
+- 26 kịch bản HTTP đạt trên cơ sở dữ liệu thử nghiệm. Hai tài khoản Triển khai trong cùng dự án chỉ nhận thông tin chung và các mục của mình. API kiểm tra phạm vi khi sửa và khi mở tệp riêng. Dữ liệu phản hồi cho vai trò này chỉ có trường phục vụ triển khai. Kiểm thử cũng xác nhận danh sách giao việc làm mới sau khi tài khoản kích hoạt và quyền truy cập được thu hồi khi mất mọi phân công.
+- 19 kiểm thử lưu dữ liệu, 12 kiểm thử xác thực, 15 kiểm thử bảo mật và 3 kiểm thử migration đạt. Migration 008 giữ nguyên tài khoản cũ và thêm vai trò Triển khai. Kiểm thử sử dụng PGlite cục bộ, với trình quét tệp mô phỏng trong bộ HTTP.
+
+## Phân trang màn hình Khách hàng
+
+- Build production, TypeScript, 64 kiểm thử CRM và 9 kiểm thử Excel đạt.
+- 25 kịch bản HTTP đạt trên database tạm. Kiểm tra quyền của API quản lý, danh sách 25 dòng, hồ sơ, chọn theo bộ lọc, xuất theo ID và đối chiếu Excel ở máy chủ.
+- Edge với 32 khách giả đã đi qua hai trang, chọn và sửa khách qua nhiều trang, xuất đúng dòng CSV, tìm tiếng Việt không dấu, lọc theo nguồn, tải lịch sử theo hồ sơ, chọn khách liên quan và nhập Excel có dòng trùng ngoài trang đang xem. Mở trực tiếp `/?section=customers` thực hiện các thao tác này mà không gọi API workspace đầy đủ. Biểu mẫu cơ hội vẫn mở với đúng khách đã chọn.
+
+## Chuyển dữ liệu sang bảng nghiệp vụ
+
+| Hạng mục | Kết quả tại local |
+|---|---|
+| Migration 006 | So sánh đầy đủ snapshot trước và sau trên hai workspace giả, gồm ID, liên kết, lịch sử, số tiền và phiên bản. Dữ liệu có liên kết lỗi làm transaction hoàn tác. Bản cũ bị chặn ghi lên snapshot lưu trữ |
+| Công cụ đối chiếu | Chạy thử có hoàn tác. Áp dụng chính thức một lần. Đối chiếu trước lần ghi đầu và giữ tài khoản |
+| Lưu đồng thời | Hai lần sửa khách khác nhau lưu được với cùng revision ban đầu. Lần sửa cũ trên cùng khách trả HTTP 409 |
+| Lưu trữ | 19 kiểm thử lưu dữ liệu, 12 kiểm thử xác thực, 2 kiểm thử migration đạt trên PGlite trong RAM |
+| HTTP và trình duyệt | 23 kịch bản HTTP đạt. Kiểm tra phân trang và phạm vi khách của từng tài khoản. Luồng thêm user, kích hoạt, giữ bản nháp và tắt demo vẫn đạt trên Edge |
+| Bản dựng | Build và TypeScript đạt. `bash -n` kiểm tra cú pháp script khôi phục |
+
+Một lượt thử cục bộ với 10.000 khách và 100.000 hoạt động tạo dữ liệu API tổng hợp khoảng 16,8 MB. Truy vấn 25 khách khoảng 56 ms, đọc toàn bộ khoảng 745 ms và sửa một khách khoảng 998 ms. Đây là số đo từng thao tác trên PGlite, dùng để nhận diện phần còn đọc toàn bộ, chưa đo tải đồng thời trên PostgreSQL thật. Hướng dẫn chạy thử trên bản sao và mở lại VPS nằm trong [README-VPS.md](README-VPS.md#nâng-cấp-từ-snapshot-sang-các-bảng-nghiệp-vụ).
+
+## Đợt bảo toàn dữ liệu, thêm người dùng và tắt demo
+
+| Hạng mục | Kết quả tại local |
+|---|---|
+| Nghiệp vụ, Excel và bảo mật | 64, 9 và 15 kiểm thử đạt |
+| Lưu dữ liệu và tài khoản | 17 và 12 kiểm thử đạt với PGlite trong RAM |
+| HTTP production | 22 tình huống đạt. Demo bị chặn trong CRM, xuất dữ liệu và báo giá |
+| Edge | Hai phiên sửa cùng hồ sơ. Người đang sửa nhận xung đột, giữ bản nháp và lưu lại mà giữ email mới của phiên kia. Tạo user từ Admin, kích hoạt, đăng nhập và xác nhận bỏ qua lựa chọn demo cũ |
+| Migration | Áp dụng 005 từ bộ schema 001 đến 004 có dữ liệu mẫu tạm. Đối chiếu cả hai workspace và tài khoản. Chạy lần thứ hai không áp dụng lại |
+| Bản dựng và cấu hình | TypeScript, build standalone và kiểm tra Compose Nginx đạt |
+
+Các kiểm tra HTTP dùng giao thức scanner mô phỏng và database tạm. Xem [kế hoạch đưa vào vận hành](KE-HOACH-VAN-HANH.md) để theo dõi phần tách bảng, các vai trò mới và nghiệm thu trên VPS.
+
 ## Kiểm tra bản tích hợp ngày 20/11/2026
 
 Đã ghép bản SMEE-CRM-Admin vào source hiện có, giữ cấu hình Nginx ở cổng
@@ -97,7 +171,7 @@ Môi trường: macOS ARM64, Node.js **22.22.1**, npm **10.9.4**, Next.js **16.4
 
 - Gói ZIP chứa source/schema/asset thương hiệu/test/tài liệu, **không chứa `.env` thật, mật khẩu, database hay tệp khách hàng production**. Database VPS khởi tạo độc lập; chưa tự chuyển dữ liệu từ Sites.
 - Dữ liệu nghiệp vụ vẫn dùng snapshot JSON trong PostgreSQL, tối đa **1.800.000 byte mỗi không gian**, gồm lịch sử. Tệp riêng không tính vào giới hạn này. Bản này chưa chuyển từng khách/hoạt động sang bảng riêng cho dữ liệu lớn; không tăng hạn mức tùy tiện.
-- Chưa có MFA hoặc gửi email tự động. Link đặt mật khẩu phải được chủ sở hữu chuyển riêng cho đúng người. Bảo vệ quyền SSH/Docker và sao lưu ngoài VPS vẫn là trách nhiệm vận hành.
+- MFA có thể bắt buộc với Chủ sở hữu và Tài chính bằng `SMEE_REQUIRE_MFA=true` và khóa riêng `SMEE_MFA_KEY`. Link đặt mật khẩu vẫn được chủ sở hữu chuyển riêng cho đúng người. Bảo vệ quyền SSH/Docker và sao lưu ngoài VPS vẫn là trách nhiệm vận hành.
 
 ## Chạy lại kiểm thử
 

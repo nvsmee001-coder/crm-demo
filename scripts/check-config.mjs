@@ -28,6 +28,13 @@ export function validateDeploymentEnvironment(env) {
   if (password.length < 32 || /replace|change[_-]?me|your[_-]|example|password/i.test(password) || new Set(password).size < 8) {
     fail('Database password is missing, weak or a placeholder. Generate a fresh 64-character hex password with openssl rand -hex 32 and configure PostgreSQL consistently.');
   }
+  const requireMfa=env.SMEE_REQUIRE_MFA || 'false';
+  const mfaKey=env.SMEE_MFA_KEY || '';
+  if (!['true','false'].includes(requireMfa)) fail('SMEE_REQUIRE_MFA must be true or false.');
+  if ((requireMfa==='true' || mfaKey) && (!/^[a-f0-9]{64}$/i.test(mfaKey) ||
+      new Set(mfaKey.toLowerCase()).size<8 || mfaKey.toLowerCase()===password.toLowerCase())) {
+    fail('Generate a separate SMEE_MFA_KEY with openssl rand -hex 32.');
+  }
   if (env.CLAMAV_REQUIRED !== 'true' || !env.CLAMAV_HOST || /\s/.test(env.CLAMAV_HOST)) fail('Production requires CLAMAV_REQUIRED=true and a valid CLAMAV_HOST.');
   const port = Number(env.CLAMAV_PORT || 3310);
   if (!Number.isInteger(port) || port < 1 || port > 65535) fail('CLAMAV_PORT must be a valid TCP port.');

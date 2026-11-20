@@ -10,6 +10,7 @@ export type EmployeeMutation = (command: Omit<Command, 'expectedRevision'>, opti
   preserveOnConflict?: boolean;
   onSuccess?: (response: CRMResponse) => void;
   onError?: (message: string) => void;
+  onConflict?: (latest: CRMResponse) => void;
 }) => Promise<boolean | undefined>;
 
 type Props = {

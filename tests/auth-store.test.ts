@@ -57,6 +57,24 @@ test('independent auth: credentials, one-use activation, session revocation and 
    const employee = { userId: staffId, email: 'auth-staff@example.test', displayName: 'Auth QA Telesales' };
    await assert.rejects(getAdminDashboard(employee), { status: 403 });
   });
+  await t.test('Admin creates a linked directory member and login grant together and rolls back duplicates',async()=>{
+   const email='auth-inline@example.test',name='Nhân sự tạo từ Admin';
+   let access=await getAccessResponse(owner);
+   const draft={action:'upsert' as const,email,role:'account' as const,newMember:{name,jobTitle:'Chăm sóc khách'}};
+   const before=await loadWorkspace('live',owner);
+   access=await mutateAccess(owner,{...draft,expectedRevision:access.revision!});
+   const linked=access.accounts!.find(account=>account.email===email)!;
+   const after=await loadWorkspace('live',owner);
+   assert.equal(after.revision,before.revision+1);
+   assert.ok(after.data.team.some(member=>member.id===linked.teamMemberId && member.name===name && member.role===draft.newMember.jobTitle));
+   await auth.activatePassword(await auth.issueSetupToken(linked.id,owner.userId),staffPassword);
+   access=await getAccessResponse(owner);
+   const user=(await query<{display_name:string}>('SELECT display_name FROM auth_users WHERE email=$1',[email])).rows[0];
+   assert.equal(user.display_name,name);
+   assert.ok((await auth.loginPassword(email,staffPassword)).token);
+   await assert.rejects(mutateAccess(owner,{...draft,expectedRevision:access.revision!,newMember:{...draft.newMember,name:'Không được tạo'}}),/Email đã có/);
+   assert.equal((await loadWorkspace('live',owner)).revision,after.revision);
+  });
   await t.test('password change verifies current password and revokes every old session',async()=>{
    await assert.rejects(auth.changePassword(staffId,'wrong',nextStaffPassword),/không đúng/);
    await auth.changePassword(staffId,staffPassword,nextStaffPassword);

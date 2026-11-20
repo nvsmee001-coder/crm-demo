@@ -4,6 +4,8 @@ Bản này chạy bằng **Next.js/Node.js + PostgreSQL**, lưu tệp riêng tr�
 
 Source không chứa dữ liệu khách hàng hay tài khoản production cũ. Website Sites cũ không bị thay đổi khi bạn cài bản này. Việc chuyển dữ liệu thật từ Sites là một công việc riêng; xem phần cuối trước khi nhập dữ liệu đang hoạt động.
 
+VPS mặc định chạy **Dữ liệu công ty**. Chỉ đặt `SMEE_ENABLE_DEMO=true` trên bản cài thử có database và volume riêng. Tắt demo làm ẩn nút chuyển và chặn truy cập trong API. Snapshot mẫu có sẵn được giữ lại trong database.
+
 ## 1. Chuẩn bị
 
 - VPS Linux 64-bit; các bước dưới đây dùng Ubuntu 24.04 LTS hoặc 26.04 LTS và quyền `sudo`.
@@ -212,10 +214,10 @@ docker compose logs --tail=100 postgres
 
 Không dùng `npm run dev` hoặc `wrangler dev` để chạy production.
 
-## 6. Cấp tài khoản cho Account và Telesales
+## 6. Quản trị tài khoản
 
-1. Vào **Cài đặt → Danh bạ đội ngũ**, tạo nhân sự.
-2. Vào **Quản trị → Tài khoản** (`/admin`), chọn nhân sự, email và quyền **Account** hoặc **Telesales**, rồi lưu.
+1. Vào **Quản trị → Tài khoản → Thêm người dùng** (`/admin`). Chọn nhân sự có sẵn hoặc tạo ngay trong biểu mẫu.
+2. Điền email đăng nhập và chọn vai trò theo công việc của nhân viên.
 3. Bấm **Đặt mật khẩu** cho tài khoản đó để tạo link hiệu lực 1 giờ. Chủ sở hữu chuyển link qua kênh riêng đã xác minh với nhân viên. App chưa tự gửi email.
 4. Nhân viên mở link, đặt mật khẩu và đăng nhập cùng domain. Link dùng một lần và có hạn; tạo link mới nếu hết hạn.
 5. Chủ sở hữu giao khách trong CRM. Account và Telesales đều có thể bấm **Thêm khách tự khai thác** hoặc **Nhập Excel** từ trang của mình. Khách vừa tạo được giao cho chính nhân viên đang đăng nhập. Nhân viên theo dõi kết quả và lịch liên hệ trong phạm vi hồ sơ được phân công.
@@ -223,6 +225,21 @@ Không dùng `npm run dev` hoặc `wrangler dev` để chạy production.
 Khi khóa tài khoản hoặc chuyển khách sang người khác, quyền được kiểm tra lại ở máy chủ. Link đặt lại mật khẩu mới sẽ thay thế link cũ và hoàn tất đặt lại sẽ thu hồi các phiên đăng nhập cũ. Đăng xuất dùng thao tác POST có kiểm tra nguồn yêu cầu.
 
 Nếu chủ sở hữu quên mật khẩu, người quản trị có quyền SSH chạy `docker compose run --rm app npm run owner:reset` và nhập mật khẩu ẩn. Lệnh thu hồi các phiên cũ. Phiên đăng nhập thông thường có thời hạn 8 giờ.
+
+### Bật xác thực hai lớp trước khi vận hành
+
+1. Sao lưu database và tệp rồi triển khai phiên bản có migration `010-account-mfa.sql`. Trên VPS, tạo khóa riêng bằng `openssl rand -hex 32` và điền kết quả vào `SMEE_MFA_KEY` trong `.env`. Lưu một bản khóa bảo mật cùng quy trình khôi phục. Khóa phải giữ nguyên qua các lần cập nhật vì dùng để giải mã thiết bị MFA đã đăng ký.
+2. Đặt `SMEE_REQUIRE_MFA=true` trong `.env` và tạo lại container app. Với cấu hình Nginx hiện có, giữ hai tệp `-f` khi chạy `docker compose -f compose.yaml -f compose.nginx.yaml up -d --build --wait app`. Với cấu hình Compose mặc định dùng `docker compose up -d --build --wait app`.
+3. Đăng nhập lại. Chủ sở hữu và Tài chính chưa có MFA sẽ được đưa đến trang thiết lập và chỉ vào được CRM sau khi xác nhận mã. Dùng ứng dụng xác thực có mã theo thời gian. Lưu 8 mã khôi phục ở nơi an toàn. Mỗi mã dùng một lần. Nhân viên các vai trò khác có thể tự bật trong **Đổi mật khẩu → Quản lý xác thực hai lớp**.
+4. Khi mất thiết bị, dùng một mã khôi phục để vào rồi đăng ký thiết bị mới. Nếu mất cả mã, Chủ sở hữu có thể cấp lại thiết bị cho nhân viên tại **Quản trị → Tài khoản → Cấp lại MFA**. Nếu mất toàn bộ mã của Chủ sở hữu, người có quyền SSH chạy `docker compose run --rm app npm run owner:mfa-reset -- --confirm-reset-mfa`, sau đó Chủ sở hữu đăng nhập bằng mật khẩu hiện tại để đăng ký lại. Cả hai đường cấp lại đều thu hồi phiên và mã cũ.
+
+Sau khi phục hồi backup, các mã khôi phục trong bản sao bị thu hồi. Chờ tối đa 60 giây sau khi app khởi động rồi xác thực bằng ứng dụng. Đăng ký lại thiết bị để nhận bộ mã khôi phục mới. Lưu giữ khóa `SMEE_MFA_KEY` tương ứng với bản sao được phục hồi.
+
+### Khóa và bàn giao khi nhân viên nghỉ việc
+
+1. Tại **Quản trị → Tài khoản**, bấm **Khóa** để xem khách, cơ hội, lịch chăm sóc, hàng chờ Telesales, dự án và đầu việc còn mở.
+2. Chọn người nhận đủ quyền theo từng nhóm, nhập lý do và xác nhận bằng mật khẩu hiện tại. Đề nghị chuyển khách còn chờ có liên quan sẽ được hủy và giữ lý do để gửi lại khi cần. Hồ sơ hoàn tất giữ người phụ trách cũ.
+3. Nếu cần cắt quyền ngay, chọn **Chỉ khóa ngay**. Hệ thống thu hồi phiên và liên kết đặt mật khẩu. Chủ sở hữu có thể quay lại **Bàn giao việc** sau khi đã có người nhận. Nhật ký quản trị lưu người thao tác, tài khoản liên quan và lý do.
 
 ## 7. Excel và tệp đính kèm
 
@@ -262,6 +279,8 @@ SMEE_RESTORE_CONFIRM=ERASE_CURRENT_DATA bash deploy/restore.sh /duong/dan/tuyet/
 
 Script kiểm tra checksum, archive tệp và khả năng đọc dump trước khi dừng app. Sau đó script phục hồi PostgreSQL bằng transaction, thay tệp và đối chiếu kích thước cùng SHA-256 của từng tài liệu với bản ghi PostgreSQL. Khi kiểm tra đạt, script thu hồi toàn bộ session/link đặt mật khẩu và chờ app báo khỏe. Nếu lỗi trong lúc thay dữ liệu, kiểm tra tài liệu hoặc thu hồi phiên, app giữ trạng thái dừng để người vận hành kiểm tra. Sau phục hồi, đăng nhập lại và kiểm tra khách hàng, phân quyền, tệp đính kèm.
 
+Backup cũ thiếu các bảng đã triển khai, ví dụ bảng nghiệp vụ từ migration 006, nhóm dự án từ migration 008 hoặc MFA từ migration 010, phải phục hồi vào database trống dành cho khôi phục. Sau khi đã nhận dữ liệu trên phiên bản mới, đối chiếu cả các giao dịch phát sinh sau thời điểm backup trước khi chuyển dịch vụ sang bản phục hồi.
+
 **Không chạy `docker compose down -v`** trên môi trường có dữ liệu cần giữ; `-v` xóa volume. Cập nhật image hoặc `docker compose up` thông thường không xóa volume.
 
 ## 9. Cập nhật phiên bản
@@ -271,6 +290,27 @@ Script kiểm tra checksum, archive tệp và khả năng đọc dump trước k
 3. Chạy `docker compose build --pull` rồi `docker compose up -d --wait`.
 4. App chạy migration có khóa/đánh dấu phiên bản trước khi khởi động. Không sửa nội dung migration đã áp dụng; thêm migration mới.
 5. Kiểm tra health/login/quyền/upload sau cập nhật. Khôi phục cần cả source lẫn schema tương thích; không giả định chỉ đổi image là đảo ngược mọi migration.
+
+### Nâng cấp từ snapshot sang các bảng nghiệp vụ
+
+Migration 006 tách dữ liệu thành các bảng trong cùng database, giữ ID, phiên bản, tài khoản và tệp. Cột `crm_workspaces.data` giữ snapshot cũ để đối chiếu. Phiên bản mới ghi vào các bảng nghiệp vụ, trong khi PostgreSQL chặn cập nhật lên cột lưu trữ cũ.
+
+1. Sao lưu PostgreSQL và tệp. Phục hồi sang môi trường thử riêng. Kiểm tra bản sao đang có schema trước 006 rồi chạy thử bằng image mới, bỏ qua entrypoint tự migrate. Ví dụ trên môi trường thử:
+
+   ```bash
+   docker compose run --rm --no-deps --entrypoint node app --import tsx scripts/check-workspace-tables.ts --dry-run
+   ```
+
+2. Chạy cửa sổ bảo trì. Dừng app/tiến trình ghi dùng database này. Giữ backup ngay trước lúc chuyển. Áp dụng migration bằng image mới rồi chạy công cụ đối chiếu trước khi mở ghi:
+
+   ```bash
+   docker compose run --rm --no-deps --entrypoint node app scripts/migrate.mjs
+   docker compose run --rm --no-deps --entrypoint node app --import tsx scripts/check-workspace-tables.ts
+   ```
+
+3. Chỉ mở app khi lệnh đối chiếu thành công. Với không gian đã tồn tại trước migration, kiểm tra đầu ra `archiveCompared: true` trước lần ghi đầu tiên. Kiểm tra login, quyền đọc khách, dự án và phiếu thu sau khi app lên. Quy trình thực hiện trên bản sao giúp biết trước lỗi liên kết và thời gian bảo trì.
+
+Quay lui trước khi có lần ghi mới bằng cách phục hồi backup trước chuyển vào database riêng và chạy image cũ tương thích. Sau khi đã ghi, giữ bản sao trạng thái mới để đối chiếu giao dịch trước khi thực hiện phục hồi. Việc chạy lại image cũ trên database đã chuyển sẽ đọc snapshot đã lưu trữ và không ghi được lên nó.
 
 Image Node/PostgreSQL/Caddy/ClamAV trong Compose dùng nhánh phiên bản cập nhật. Với quy trình vận hành nghiêm ngặt, kiểm thử và khóa digest của từng image trong bản phát hành của công ty; xem lại cảnh báo bảo mật trước mỗi đợt nâng cấp.
 
@@ -309,7 +349,9 @@ Các script `test:database`, `test:auth` và `test:api` dành cho integration tr
 - Không nhập thẳng các header danh tính ChatGPT, session hoặc danh tính thử vào bản VPS.
 - Trong lần bàn giao này chưa tự kết nối D1/R2 của Site để sao chép dữ liệu thật. Khởi tạo VPS sẽ tạo không gian mới.
 
-Dữ liệu nghiệp vụ hiện còn lưu theo snapshot JSON của từng không gian, giới hạn **1.800.000 byte (khoảng 1,8 MB)** gồm bản ghi và lịch sử; tệp upload lưu riêng. Giới hạn được kiểm soát ở `lib/crm-store.ts`; khi đạt ngưỡng, lần ghi mới bị từ chối và dữ liệu cũ được giữ. PostgreSQL đã thay D1 nhưng việc chuyển từng khách/hoạt động sang bảng riêng để mở rộng quy mô là hạng mục khác. Không tăng giới hạn tùy ý trước khi đánh giá tải và xung đột cập nhật.
+Dữ liệu nghiệp vụ hiện lưu theo bản ghi riêng ở PostgreSQL. Giới hạn 1.800.000 byte chỉ còn trên cột snapshot lưu trữ. Màn hình quản lý **Khách hàng** dùng `/api/crm/customers` để đọc theo trang và mở riêng từng hồ sơ. Có thể mở trực tiếp bằng `/?section=customers`. Màn hình Triển khai và Tài chính dùng API đọc riêng. Các màn hình còn đọc workspace tổng hợp cần đo tải đại diện trước khi mở rộng. Migration 007 thêm chỉ mục lịch sử hồ sơ.
+
+Migration 009 thêm quyền **Tài chính** vào danh mục vai trò và giữ các bản ghi tài khoản hiện có. Sau khi cập nhật trên môi trường nghiệm thu, thử đăng nhập Tài chính, xem hợp đồng đã xác nhận, ghi thử một phiếu và xử lý đề nghị từ tài khoản Chủ sở hữu. Dự án cũ có thể mở từ bộ lọc **Chưa xác nhận hợp đồng** để đối chiếu theo chứng từ.
 
 ## 12. Phạm vi xác minh
 

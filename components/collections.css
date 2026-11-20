@@ -13,8 +13,8 @@
 .col-filters, .col-fields, .col-buttons, .col-pages { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .col-filters { margin: 16px 0; }
 .col-fields label, .col-filters label { display: grid; gap: 6px; min-width: 0; }
-.col-workspace input, .col-workspace select { padding: 9px 11px; border: 1px solid #cfd2d9; border-radius: 8px; max-width: 100%; background: white; color: #272830; font: inherit; }
-.col-workspace input:focus-visible, .col-workspace select:focus-visible, .col-workspace button:focus-visible { outline: 2px solid #ae252b; outline-offset: 2px; }
+.col-workspace input, .col-workspace select, .col-workspace textarea { padding: 9px 11px; border: 1px solid #cfd2d9; border-radius: 8px; max-width: 100%; background: white; color: #272830; font: inherit; }
+.col-workspace input:focus-visible, .col-workspace select:focus-visible, .col-workspace textarea:focus-visible, .col-workspace button:focus-visible { outline: 2px solid #ae252b; outline-offset: 2px; }
 .col-breakdown { margin: 18px 0; padding: 16px; background: #f6f7f9; border-radius: 12px; }
 .col-breakdown dd { margin: 5px 0 0; font-weight: 650; overflow-wrap: anywhere; }
 .col-form { display: grid; gap: 12px; padding: 16px; border: 1px solid #e2e4e9; border-radius: 12px; }
@@ -29,7 +29,9 @@
 .col-table td:first-child { min-width: 165px; }
 .col-table td:nth-child(n+2) { white-space: nowrap; }
 .col-table small, .col-receipt small { display: block; margin-top: 3px; }
-.col-workspace .col-error, .col-late { color: #ac232c; }
+.col-error, .col-late { color: #ac232c; }
+.col-evidence { overflow-wrap: anywhere; white-space: pre-wrap; }
+.finance-main > .col-buttons { align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .col-history { display: grid; }
 .col-receipt { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid #e8e9ed; overflow-wrap: anywhere; }
 .col-receipt > div { margin-right: auto; }

@@ -11,11 +11,13 @@ import type { EmployeeMutation } from './ProspectEditor';
 
 type Props = {
   data: Workspace;
+  revision: number;
   busy: boolean;
   staffRole?: 'account' | 'telesales';
+  serverPreview?: boolean;
   onClose: () => void;
   onMutate: EmployeeMutation;
-  onImported: (phones: string[], distribute: boolean) => void;
+  onImported: (phones: string[], distribute: boolean, ids?:string[]) => void;
 };
 type Preview = {rows: CustomerImportPreviewRow[]; revision: number};
 const statuses = {ready: 'Hợp lệ', duplicate: 'Trùng', invalid: 'Cần sửa'};
@@ -35,7 +37,8 @@ function csvCell(value: unknown) {
   return '"' + text.replace(/"/g, '""') + '"';
 }
 
-export default function CustomerImportDialog({data, busy, staffRole, onClose, onMutate, onImported}: Props) {
+export default function CustomerImportDialog({data, revision, busy, staffRole, serverPreview=false, onClose, onMutate, onImported}: Props) {
+  const usePreview=!!staffRole||serverPreview;
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [sheets, setSheets] = useState<CustomerExcelSheet[]>([]);
   const [sheetIndex, setSheetIndex] = useState(0);
@@ -48,9 +51,10 @@ export default function CustomerImportDialog({data, busy, staffRole, onClose, on
   const [rowFilter, setRowFilter] = useState('all');
   const [remote, setRemote] = useState<Preview | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [saved, setSaved] = useState({phones: [] as string[], skipped: 0});
+  const [saved, setSaved] = useState({phones: [] as string[], ids:[] as string[], skipped: 0});
   const ref = useRef<HTMLDivElement>(null);
   const running = useRef(false);
+  const previewRevision = useRef(revision);
   const locked = busy || processing;
   const fields = staffRole ? prospectExcelFields : CUSTOMER_EXCEL_FIELDS;
   const title = staffRole ? 'Nhập khách tự khai thác từ Excel' : 'Nhập khách hàng từ Excel';
@@ -96,11 +100,11 @@ export default function CustomerImportDialog({data, busy, staffRole, onClose, on
   const mapped = useMemo(() => sheet && !mappingError ? mapCustomerExcelRows(sheet, mapping, fields) : [], [sheet, mapping, fields, mappingError]);
   const retrySelection = useRef<{input: typeof mapped; included: Set<number>} | null>(null);
   const local = useMemo(() => {
-    if (staffRole || !mapped.length) return {rows: [], error: ''};
+    if (usePreview || !mapped.length) return {rows: [], error: ''};
     try { return {rows: previewCustomerImport(mapped, data, owner), error: ''}; }
     catch (reason) { return {rows: [], error: reason instanceof Error ? reason.message : 'Không kiểm tra được dữ liệu.'}; }
-  }, [mapped, data, owner, staffRole]);
-  const rows = staffRole ? remote?.rows || [] : local.rows;
+  }, [mapped, data, owner, usePreview]);
+  const rows = usePreview ? remote?.rows || [] : local.rows;
   const ready = rows.filter(row => row.status === 'ready');
   const duplicateCount = rows.filter(row => row.status === 'duplicate').length;
   const invalidCount = rows.length - ready.length - duplicateCount;
@@ -133,12 +137,12 @@ export default function CustomerImportDialog({data, busy, staffRole, onClose, on
   async function checkRows() {
     if (locked || running.current || mappingError || !mapped.length) return;
     setError(''); setRowFilter('all');
-    if (!staffRole) { setStep(3); return; }
+    if (!usePreview) { previewRevision.current=revision; setStep(3); return; }
     running.current = true;
     setProcessing(true); setRemote(null);
     try {
       const response = await fetch('/api/crm/import-preview', {
-        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rows: mapped}),
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rows:mapped,...(serverPreview&&!staffRole?{owner}:{})}),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Không kiểm tra được dữ liệu.');
@@ -167,30 +171,36 @@ export default function CustomerImportDialog({data, busy, staffRole, onClose, on
   }
   async function submit() {
     if (locked || running.current || !chosen.length || mappingError || (!staffRole && (local.error || (rejected && !skipRejected)))) return;
-    if (staffRole && !remote) return;
+    if (usePreview && !remote) return;
     running.current = true;
     setProcessing(true); setError('');
     const sourceFile = filename.slice(0, 180);
     try {
-      let ok, failure = '';
+      let ok, failure = '', conflict = false;
+      let createdIds:string[]=[];
+      const options:NonNullable<Parameters<EmployeeMutation>[1]> = {preserveOnConflict:true,onConflict:()=>{conflict=true},onError:(message:string)=>{failure=message},
+        onSuccess:result=>{createdIds=result.createdCustomerIds??[];}};
       if (staffRole && remote) {
         ok = await onMutate({
           action: 'import_prospects',
           data: {sourceFile, rows: mapped.filter(row => selected.has(row.rowNumber))},
-        }, {expectedRevision: remote.revision, preserveOnConflict: true, onError: message => { failure = message; }});
+        }, {...options,expectedRevision:remote.revision});
       } else {
-        ok = await onMutate({action: 'import_customers', data: {rows: chosen.map(row => row.customer), owner, sourceFile}});
+        ok = await onMutate({action: 'import_customers', data: {rows: chosen.map(row => row.customer), owner, sourceFile}}, {...options,expectedRevision:remote?.revision??previewRevision.current});
       }
-      if (!ok) throw new Error(failure || 'Chưa lưu được đợt nhập.');
-      setSaved({phones: chosen.map(row => String(row.customer.phone)), skipped: rows.length - chosen.length});
+      if (!ok) {
+        if (conflict) {
+          if (staffRole) retrySelection.current = {input:mapped,included:new Set(selected)};
+          setRemote(null); setStep(2);
+        }
+        setError(failure || 'Chưa lưu được đợt nhập.');
+        return;
+      }
+      setSaved({phones: chosen.map(row => String(row.customer.phone)), ids:createdIds, skipped: rows.length - chosen.length});
       setStep(4);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : 'Chưa lưu được đợt nhập.';
-      if (staffRole) {
-        retrySelection.current = {input: mapped, included: new Set(selected)};
-        setRemote(null); setStep(2);
-        setError(message + ' Bấm Kiểm tra để xem lại các dòng trước khi nhập.');
-      } else setError(message);
+      setError(message);
     } finally { running.current = false; setProcessing(false); }
   }
 
@@ -218,7 +228,7 @@ export default function CustomerImportDialog({data, busy, staffRole, onClose, on
             {staffRole ? <a className="btn" href={PROSPECT_TEMPLATE_URL} download><Download size={15}/>Tải mẫu Excel</a>
               : <button className="btn" disabled={locked} onClick={() => void template()}><Download size={15}/>Tải mẫu Excel</button>}
           </div>
-          <p className="import-help">{staffRole
+          <p className="import-help">{usePreview
             ? 'Các dòng đã ghép cột sẽ được gửi đến CRM để kiểm tra trùng trước khi bạn xác nhận lưu.'
             : 'File được đọc ngay trong trình duyệt. Chỉ những dòng bạn xác nhận nhập mới được lưu vào CRM.'} Với file .xls, hãy lưu lại thành .xlsx.</p>
         </>}
@@ -281,8 +291,8 @@ export default function CustomerImportDialog({data, busy, staffRole, onClose, on
       <footer className="import-footer">
         {step === 1 ? <button className="btn" disabled={locked} onClick={() => close.current()}>Đóng</button>
           : step === 4 ? <>
-            <button className={'btn' + (staffRole ? ' primary' : '')} onClick={() => onImported(saved.phones, false)}>{staffRole ? 'Xem khách tự khai thác' : 'Về danh sách khách hàng'}</button>
-            {!staffRole && <button className="btn primary" onClick={() => onImported(saved.phones, true)}>Phân chia telesales<ArrowRight size={15}/></button>}
+            <button className={'btn' + (staffRole ? ' primary' : '')} onClick={() => onImported(saved.phones, false,saved.ids)}>{staffRole ? 'Xem khách tự khai thác' : 'Về danh sách khách hàng'}</button>
+            {!staffRole && <button className="btn primary" onClick={() => onImported(saved.phones, true,saved.ids)}>Phân chia telesales<ArrowRight size={15}/></button>}
           </> : <>
             <button className="btn" disabled={locked} onClick={() => { setStep(step === 3 ? 2 : 1); setError(''); }}><ArrowLeft size={14}/>Quay lại</button>
             {step === 2 ? <button className="btn primary" disabled={locked || !!mappingError || !sheet?.rows.length} onClick={() => void checkRows()}>

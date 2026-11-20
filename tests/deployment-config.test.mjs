@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { validateDeploymentEnvironment } from '../scripts/check-config.mjs';
 const valid = {
  NODE_ENV:'production',APP_DOMAIN:'crm.smee.test',APP_ORIGIN:'https://crm.smee.test',SMEE_OWNER_EMAIL:'owner@smee.test',UPLOAD_DIR:'/app/data/uploads',
@@ -20,4 +21,12 @@ test('validation errors never include the rejected database secret',()=>{
  const secret='private-short-value';
  try {validateDeploymentEnvironment({...valid,DATABASE_URL:`postgresql://smee:${secret}@postgres:5432/smee`});assert.fail('must reject');}
  catch(error){assert.ok(!error.message.includes(secret));}
+});
+test('mandatory MFA requires an independent deployment key and never prints it',()=>{
+ assert.throws(()=>validateDeploymentEnvironment({...valid,SMEE_REQUIRE_MFA:'true'}),/SMEE_MFA_KEY/);
+ assert.throws(()=>validateDeploymentEnvironment({...valid,SMEE_REQUIRE_MFA:'yes'}),/true or false/);
+ const databasePassword=new URL(valid.DATABASE_URL).password;
+ assert.throws(()=>validateDeploymentEnvironment({...valid,SMEE_REQUIRE_MFA:'true',SMEE_MFA_KEY:databasePassword}),
+  error=>error.message.includes('SMEE_MFA_KEY')&&!error.message.includes(databasePassword));
+ assert.equal(validateDeploymentEnvironment({...valid,SMEE_REQUIRE_MFA:'true',SMEE_MFA_KEY:randomBytes(32).toString('hex')}),true);
 });

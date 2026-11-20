@@ -43,6 +43,22 @@ test('project completion ignores archived change requests but respects open work
   const done=run(w,{action:'complete_project',id:'p1',data:{acceptance:'Biên bản nghiệm thu'}});assert.equal(done.projects[0].status,'Hoàn tất');assert.equal(done.changes[0].status,'Chờ duyệt');
 });
 
+test('completed projects protect child records and reopening preserves acceptance in the audit trail', () => {
+  const w = fixture();
+  Object.assign(w.projects[0], {status:'Hoàn tất', acceptance:'Biên bản bàn giao số 1'});
+  for (const [collection, id] of [['tasks','t1'], ['contents','ct1'], ['issues','i1']] as const) {
+    assert.throws(() => run(w, {action:'delete', collection, id}), /Dự án đã hoàn tất/);
+    assert.throws(() => run(w, {action:'update', collection, id, data:{owner:'m2'}}), /Dự án đã hoàn tất/);
+    assert.throws(() => run(w, {action:'create', collection, data:{projectId:'p1'}}), /Dự án đã hoàn tất/);
+  }
+  assert.throws(() => run(w, {action:'reopen_project', id:'p1', data:{reason:' '}}), /Lý do mở lại/);
+  const reopened = run(w, {action:'reopen_project', id:'p1', data:{reason:'Bổ sung hạng mục còn thiếu'}});
+  assert.equal(reopened.projects[0].status, 'Đang triển khai');
+  assert.equal(reopened.activities[0].details?.acceptance.before, 'Biên bản bàn giao số 1');
+  assert.ok(reopened.activities[0].text.includes('Bổ sung hạng mục còn thiếu'));
+  assert.equal(run(reopened, {action:'delete', collection:'tasks', id:'t1'}).tasks.length, 0);
+});
+
 test('receivables use verified opening amounts and a separate agreed payment due date', () => {
   const w = fixture();
   const today = businessDate(now);

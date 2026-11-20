@@ -19,6 +19,11 @@ const eventNames: Record<string, string> = {
   password_changed: 'Đổi mật khẩu',
   owner_provisioned: 'Tạo tài khoản chủ sở hữu',
   owner_password_reset_cli: 'Đặt lại mật khẩu chủ sở hữu',
+  mfa_enrolled: 'Thiết lập xác thực hai lớp',
+  mfa_recovery_used: 'Dùng mã khôi phục',
+  mfa_reset: 'Cấp lại thiết bị xác thực',
+  owner_mfa_reset_cli: 'Đặt lại xác thực hai lớp của chủ sở hữu',
+  offboarding: 'Bàn giao công việc và khóa tài khoản',
 };
 const eventTime = new Intl.DateTimeFormat('vi-VN', {
   timeZone: 'Asia/Ho_Chi_Minh', dateStyle: 'short', timeStyle: 'short',
@@ -86,7 +91,8 @@ export default function AdminConsole({ initial }: { initial: AdminDashboard }) {
             <thead><tr><th>Thời gian</th><th>Hoạt động</th><th>Người thực hiện</th><th>Tài khoản liên quan</th></tr></thead>
             <tbody>{dashboard.events.map(event => <tr key={event.id}>
               <td><time dateTime={event.at}>{eventTime.format(new Date(event.at))}</time></td>
-              <td>{eventNames[event.action] || 'Thay đổi tài khoản'}</td><td>{event.actor || 'Hệ thống'}</td><td>{event.subject || '—'}</td>
+              <td>{eventNames[event.action] || 'Thay đổi tài khoản'}{event.reason&&<div className="account-audit-reason">{event.reason}</div>}</td>
+              <td>{event.actor || 'Hệ thống'}</td><td>{event.subject || '—'}</td>
             </tr>)}</tbody>
           </table></div> : <p className="admin-no-match">Chưa có sự kiện truy cập.</p>}
         </section>}

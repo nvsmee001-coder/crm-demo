@@ -1,0 +1,47 @@
+.shell {min-height:100vh;background:#f6f7f9;color:#252529}
+.header {min-height:68px;padding:14px max(18px,calc((100vw - 1240px)/2));display:flex;align-items:center;gap:14px;border-bottom:1px solid #e5e6eb;background:white}
+.header > svg, .header > img {width:106px;height:auto}
+.header > div {margin-left:auto;text-align:right;min-width:0;overflow-wrap:anywhere}
+.header small {display:block;color:#61616c}
+.main {max-width:1240px;margin:auto;padding:28px 18px 64px}
+.heading {display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.heading h1,.heading h2 {margin:0;line-height:1.2}
+.heading h1 {font-size:clamp(25px,4vw,36px)}
+.heading h2 {font-size:24px}
+.heading p,.muted,.empty p {color:#595a65}
+.company {margin:0 0 6px}
+.notice {display:flex;gap:8px;align-items:center;color:#176c47;margin:16px 0}
+.layout {display:grid;grid-template-columns:minmax(200px,270px) minmax(0,1fr);gap:18px;margin-top:22px}
+.projects {display:grid;align-content:start;gap:6px}
+.projects button,.tabs button {display:flex;align-items:center;gap:9px;text-align:left;border:1px solid transparent;border-radius:10px;padding:10px;background:white;cursor:pointer}
+.projects button[aria-pressed=true],.tabs button[aria-pressed=true] {background:#fff0ef;color:#aa211a;border-color:#ffc9c3}
+.projects small {display:block;margin-top:4px;color:#595a65}
+.panel,.empty {border:1px solid #e4e5eb;border-radius:14px;background:white;padding:22px;min-width:0}
+.empty {margin-top:22px}
+.metadata {display:flex;flex-wrap:wrap;gap:16px;margin:18px 0}
+.metadata dt {font-size:12px;color:#595a65;display:flex;align-items:center;gap:5px}
+.metadata dd {margin:4px 0 0}
+.scope,.copy {white-space:pre-wrap;overflow-wrap:anywhere}
+.scope {padding:13px;background:#f6f7f9;border-radius:8px}
+.tabs {display:flex;flex-wrap:wrap;gap:5px;margin:18px 0 8px}
+.tabs button span {font-variant-numeric:tabular-nums}
+.items {display:grid;gap:10px}
+.items article {display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:14px;border:1px solid #e4e5eb;border-radius:10px}
+.items article > div:first-child {min-width:0}
+.items h3 {margin:0 0 6px;font-size:16px}
+.items p {margin:4px 0;color:#575862}
+.items a {color:#aa211a;text-decoration:underline}
+.dialog {border:1px solid #e4e5eb;border-radius:14px;padding:24px;width:min(94vw,560px);max-height:90vh;background:white;color:#252529}
+.dialog::backdrop {background:#20263766}
+.dialog form {display:grid;gap:12px}
+.dialog h2,.dialog p {margin:0}
+.dialog label {display:grid;gap:5px}
+.dialog :is(select,input,textarea) {width:100%;border:1px solid #c9cbd4;border-radius:8px;padding:10px;font:inherit;background:white;color:#252529}
+@media(max-width:700px) {
+  .header {flex-wrap:wrap;gap:8px}
+  .layout {grid-template-columns:minmax(0,1fr)}
+  .projects {display:flex;overflow:auto;padding-bottom:5px}
+  .projects button {flex:0 0 185px}
+  .panel {padding:14px}
+  .items article {flex-direction:column}
+}

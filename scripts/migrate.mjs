@@ -1,6 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 if (!process.env.DATABASE_URL) throw new Error('Set DATABASE_URL before running migrations.');
@@ -29,7 +28,13 @@ try {
       await db.query('INSERT INTO schema_migrations(name,checksum) VALUES($1,$2)', [name, checksum]);
       await db.query('COMMIT');
       console.log('Applied ' + name);
-    } catch (error) { await db.query('ROLLBACK'); throw error; }
+    } catch (error) {
+      await db.query('ROLLBACK');
+      // PostgreSQL errors may include an entire customer row in their detail.
+      console.error('Migration failed:',name,'PostgreSQL code:',error?.code ?? '-',
+        'table:',error?.table ?? '-', 'constraint:',error?.constraint ?? '-');
+      throw new Error('Migration rolled back: '+name);
+    }
   }
   console.log('Database migrations are up to date.');
 } finally {

@@ -12,5 +12,5 @@ export async function POST(request:Request){try{
   assertSameOrigin(request);
   await rateLimit('access:write:'+user.userId,30,60);
   const command=await readJsonBody(request,20_000) as AccessCommand;
-  return Response.json(await mutateAccess(user,command),options);
+  return Response.json(await mutateAccess(user,command,{requireOffboarding:true}),options);
 }catch(error){return failure(error);}}

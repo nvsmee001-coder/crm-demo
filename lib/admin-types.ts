@@ -6,6 +6,7 @@ export interface AdminEvent {
   actor: string;
   subject: string;
   at: string;
+  reason?: string;
 }
 
 export interface AdminDashboard {
@@ -13,4 +14,5 @@ export interface AdminDashboard {
   access: AccessResponse;
   team: TeamMember[];
   events: AdminEvent[];
+  mfa: {available:boolean;ownerEnabled:boolean;required:boolean;enabledAccountIds:string[];pendingAccountIds:string[]};
 }
