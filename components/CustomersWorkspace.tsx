@@ -7,6 +7,7 @@ import CustomerProfile from './CustomerProfile';
 import CustomerImportDialog from './CustomerImportDialog';
 import CustomerDistributionDialog from './CustomerDistributionDialog';
 import { normalizePhone } from '../lib/crm-engine';
+import { memberOptions } from '../lib/member-options';
 import { CUSTOMER_STATUSES, TELESALES_STATUSES, type Command, type Customer, type Deal, type Workspace } from '../lib/crm-types';
 
 type Props = {
@@ -387,7 +388,8 @@ export default function CustomersWorkspace({ data, revision, mode, telesalesAssi
       {options?.hint && <small>{options.hint}</small>}
     </label>;
   }
-  const ownerChoices = data.team.map(member => ({ value: member.id, label: member.name }));
+  const ownerChoices = memberOptions(data.team);
+  const currentOwnerChoices = memberOptions(data.team, editor?.customer?.owner);
   const filterControl = (label: string, value: string, setter: (value: string) => void, choices: string[] | { value: string; label: string }[]) => <label className="customer-filter"><span>{label}</span><select value={value} onChange={event => setter(event.target.value)}><option value="">Tất cả</option>{choices.map(choice => <option key={typeof choice === 'string' ? choice : choice.value} value={typeof choice === 'string' ? choice : choice.value}>{typeof choice === 'string' ? choice : choice.label}</option>)}</select></label>;
 
   return <section className="customers-workspace">
@@ -454,7 +456,7 @@ export default function CustomersWorkspace({ data, revision, mode, telesalesAssi
             <h3 className="customer-form-section full">Thông tin chính</h3>
             {field('name','Tên công ty / khách hàng',{required:true})}{field('contact','Người liên hệ chính')}{field('jobTitle','Chức danh người liên hệ')}{field('industry','Ngành nghề')}
             {field('phone','Điện thoại chính',{type:'tel'})}{field('email','Email chính',{type:'email'})}{field('website','Website',{type:'url',hint:'https://…'})}{field('address','Địa chỉ')}
-            {field('source','Nguồn khách',{hint:'Ví dụ: giới thiệu, website, sự kiện'})}{field('owner','Account phụ trách',{required:true,choices:ownerChoices})}
+            {field('source','Nguồn khách',{hint:'Ví dụ: giới thiệu, website, sự kiện'})}{field('owner','Account phụ trách',{required:true,choices:currentOwnerChoices})}
             {field('status','Trạng thái',{required:true,choices:CUSTOMER_STATUSES})}{field('priority','Mức ưu tiên',{choices:priorities})}
             {field('tags','Nhãn khách hàng',{full:true,hint:'Cách nhau bằng dấu phẩy. Ví dụ: VIP, Khách giới thiệu, Tiềm năng lớn.'})}
             <label className="customer-favorite-filter full"><input type="checkbox" checked={fields.favorite==='true'} onChange={event=>setFields(previous=>({...previous,favorite:event.target.checked?'true':'false'}))}/>Đánh dấu khách hàng yêu thích</label>
@@ -471,7 +473,7 @@ export default function CustomersWorkspace({ data, revision, mode, telesalesAssi
             {field('notes','Nhu cầu / ghi chú tổng quan',{type:'textarea',full:true})}{field('nextFollowUp','Ngày chăm sóc tiếp theo',{type:'date'})}{field('nextAction','Việc cần làm tiếp theo')}
           </>}
           {editor.type === 'contact' && <>{field('channel', 'Kênh liên hệ', { required: true, choices: channels })}{field('outcome', 'Kết quả', { required: true, choices: outcomes })}{field('note', 'Nội dung đã trao đổi', { type: 'textarea', required: true, full: true })}{field('nextFollowUp', 'Hẹn chăm sóc tiếp theo', { type: 'date', hint: 'Để trống nếu chưa cần hẹn lại.' })}{field('nextAction', 'Việc cần làm tiếp theo')}</>}
-          {editor.type === 'handoff' && <>{field('owner', 'Người nhận bàn giao', { required: true, choices: ownerChoices.filter(member => member.value !== editor.customer?.owner), full: true })}{field('note', 'Tình trạng khách và việc cần tiếp tục', { required: true, type: 'textarea', full: true })}<p className="customer-muted full">Chuyển {editor.customer?.actions?.filter(action => action.status === 'Cần làm' && action.owner === editor.customer?.owner).length || 0} việc đang chờ của người phụ trách cũ cùng hồ sơ. Việc đã xử lý giữ nguyên.</p></>}
+          {editor.type === 'handoff' && <>{field('owner', 'Người nhận bàn giao', { required: true, choices: currentOwnerChoices.filter(member => member.value !== editor.customer?.owner), full: true })}{field('note', 'Tình trạng khách và việc cần tiếp tục', { required: true, type: 'textarea', full: true })}<p className="customer-muted full">Chuyển {editor.customer?.actions?.filter(action => action.status === 'Cần làm' && action.owner === editor.customer?.owner).length || 0} việc đang chờ của người phụ trách cũ cùng hồ sơ. Việc đã xử lý giữ nguyên.</p></>}
           {editor.type === 'transfer' && <><p className="customer-muted full">Việc đang chờ của telesales cũ sẽ chuyển cho người nhận mới.</p>{!telesalesAssignees.length&&<p className="customer-inline-warning full">Chưa có tài khoản telesales đang hoạt động. Cấp tài khoản trong Cài đặt không gian trước khi giao khách.</p>}{field('owner', 'Nhân viên telesales nhận khách', { required: true, choices: teleChoices, full: true })}{field('note', 'Thông tin bàn giao / yêu cầu tư vấn', { required: true, type: 'textarea', full: true })}{field('nextFollowUp', 'Ngày cần gọi', { required: true, type: 'date', full: true })}<p className="customer-muted full">Khách được đưa vào hàng đợi gọi. Người phụ trách account và lịch sử chăm sóc được giữ nguyên. Tài khoản telesales được cấp cho nhân viên sẽ chỉ xem các khách đã được giao.</p>{data.customers.some(customer => editor.ids?.includes(customer.id) && !phoneTarget(customer.phone)) && <p className="customer-inline-warning full">Cần bổ sung số điện thoại hợp lệ: {data.customers.filter(customer => editor.ids?.includes(customer.id) && !phoneTarget(customer.phone)).map(customer => customer.name).join(', ')}</p>}</>}
           {editor.type === 'bulk' && <><p className="customer-muted full">Nếu đổi người phụ trách, việc đang chờ của người cũ sẽ được chuyển cùng hồ sơ.</p>{field('owner', 'Phân công cho', { choices: ownerChoices })}{field('status', 'Chuyển trạng thái', { choices: CUSTOMER_STATUSES })}{field('priority', 'Mức ưu tiên', { choices: priorities })}{field('nextFollowUp', 'Ngày chăm sóc tiếp theo', { type: 'date' })}<p className="customer-muted full">Chỉ những trường được chọn mới thay đổi, áp dụng cho {chosen.length} khách hàng đã chọn. Lịch sử phân công được lưu lại.</p></>}
         </div><div className="customer-editor-actions"><button type="button" className="btn" disabled={busy||uploadingAvatar} onClick={() => setEditor(null)}>Hủy</button><button type="submit" className="btn primary" disabled={busy||uploadingAvatar}><Check size={15}/>{busy ? 'Đang lưu…' : 'Lưu thay đổi'}</button></div>
