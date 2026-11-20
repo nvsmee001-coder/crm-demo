@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {authorizeCommand,canReadCustomer,projectWorkspace,eligibleTelesalesAccounts} from '../lib/crm-access.js';
 import {applyCommand,CRMError,normalizeWorkspace} from '../lib/crm-engine.js';
 import type {AccessContext,Command,Workspace} from '../lib/crm-types.js';
+import {COLLECTION_ACTIONS} from '../lib/crm-types.js';
 
 function context(role:AccessContext['role'],memberId='a'):AccessContext{return{role,memberId:role==='owner'?undefined:memberId,userId:`uid-${memberId}`,email:`${memberId}@example.test`,name:memberId,ownerId:'uid-owner',ownerEmail:'owner@example.test',accountId:`account-${memberId}`,accountVersion:1};}
 function fixture():Workspace{
@@ -22,6 +23,26 @@ function fixture():Workspace{
 }
 function denied(fn:()=>unknown){assert.throws(fn,(error:unknown)=>error instanceof CRMError && error.status===403);}
 function auth(w:Workspace,ctx:AccessContext,command:Partial<Command>){authorizeCommand(w,{action:'log_contact',expectedRevision:0,...command} as Command,ctx);}
+
+test('only owner writes collection records, managers can review and staff cannot read receipt activity', () => {
+  const w=fixture();
+  const projectId=w.projects[0].id;
+  for(const action of COLLECTION_ACTIONS) {
+    const command={action,id:projectId,data:{openingAmount:0},expectedRevision:0};
+    assert.doesNotThrow(()=>authorizeCommand(w,command,context('owner')));
+    for(const role of ['manager','account','telesales'] as const) {
+      denied(()=>authorizeCommand(w,command,context(role)));
+      denied(()=>applyCommand(w,command,'Nhân viên',undefined,context(role)));
+    }
+  }
+  const withLedger=applyCommand(w,{action:'open_project_ledger',id:projectId,data:{openingAmount:1200},expectedRevision:0},'Chủ',undefined,context('owner'));
+  assert.deepEqual(projectWorkspace(withLedger,context('manager')).projects[0].ledger,withLedger.projects[0].ledger);
+  for(const role of ['account','telesales'] as const) {
+    const projected=projectWorkspace(withLedger,context(role));
+    assert.equal(projected.projects.length,0);
+    assert.ok(!projected.activities.some(a=>a.kind==='open_project_ledger'));
+  }
+});
 
 test('owner and manager receive all business records and projections do not mutate stored state',()=>{
   const w=fixture();for(const role of ['owner','manager'] as const){const view=projectWorkspace(w,context(role));assert.deepEqual(view,w);view.customers[0].name='Changed';assert.equal(w.customers[0].name,'Khách A');assert.doesNotThrow(()=>auth(w,context(role),{action:'update_settings'}));}
@@ -69,6 +90,28 @@ test('live telesales recipients require active access roles and linked team memb
   assert.deepEqual(eligibleTelesalesAccounts(w,accounts),[accounts[0]]);
   // A display role in the team table never grants account-level telesales eligibility.
   w.team[1].role='Telesales';assert.deepEqual(eligibleTelesalesAccounts(w,accounts),[accounts[0]]);
+});
+test('prospecting accepts linked staff and rejects externally supplied assignment or history',()=>{
+  const workspace=fixture();
+  const account=context('account');
+  const create:Command={action:'create_prospect',expectedRevision:0,data:{name:'Công ty mới'}};
+  assert.doesNotThrow(()=>authorizeCommand(workspace,create,account));
+  assert.doesNotThrow(()=>authorizeCommand(workspace,create,context('telesales')));
+  for(const role of ['owner','manager'] as const){
+    denied(()=>authorizeCommand(workspace,create,context(role)));
+  }
+  denied(()=>authorizeCommand(workspace,create,context('account','missing')));
+  denied(()=>authorizeCommand(workspace,{...create,id:'customer-b'},account));
+  denied(()=>authorizeCommand(workspace,{...create,collection:'team'},account));
+  for(const key of ['id','owner','telesalesOwner','prospectedBy','actions','interactions','relationships']){
+    denied(()=>authorizeCommand(workspace,{...create,data:{name:'Công ty mới',[key]:'b'}},account));
+  }
+  for(const role of ['account','telesales'] as const){
+    const id=role==='account'?'customer-b':'customer-a';
+    const update:Command={action:'update',collection:'customers',id,expectedRevision:0,data:{source:'Sự kiện',priority:'Cao'}};
+    assert.doesNotThrow(()=>authorizeCommand(workspace,update,context(role)));
+    denied(()=>authorizeCommand(workspace,{...update,data:{prospectedBy:'a'}},context(role)));
+  }
 });
 test('only owner/manager may import or distribute, including forged assigned-customer command ids',()=>{
   const w=fixture();for(const role of ['account','telesales'] as const)for(const action of ['import_customers','distribute_customers'] as const)for(const id of [undefined,'customer-a','customer-b'])denied(()=>auth(w,context(role),{action,id,data:{owner:'a',rows:[{name:'Forged',phone:'0901234567'}],assignments:[{owner:'a',ids:['customer-b']}]}}));

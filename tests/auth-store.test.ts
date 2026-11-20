@@ -10,7 +10,7 @@ test('independent auth: credentials, one-use activation, session revocation and 
  const auth=await import('../lib/auth/store');
  const {tokenHash}=await import('../lib/auth/crypto');
  const {loadWorkspace,mutateWorkspace}=await import('../lib/crm-store');
- const {getAccessResponse,mutateAccess}=await import('../lib/access-store');
+ const {getAccessResponse,mutateAccess,getAdminDashboard}=await import('../lib/access-store');
  const email='auth-owner@example.test',password='fixture owner password '+randomUUID(),staffPassword='fixture staff password '+randomUUID(),nextStaffPassword='fixture new password '+randomUUID();
  process.env.SMEE_OWNER_EMAIL=email;
  try{
@@ -46,6 +46,16 @@ test('independent auth: credentials, one-use activation, session revocation and 
    const user=(await query<{id:string}>('SELECT id FROM auth_users WHERE email=$1',['auth-staff@example.test'])).rows[0];staffId=user.id;
    assert.equal((await query<{bound_user_id:string}>('SELECT bound_user_id FROM crm_access_accounts WHERE id=$1',[accountId])).rows[0].bound_user_id,staffId);
    staffToken=(await auth.loginPassword('auth-staff@example.test',staffPassword)).token;
+  });
+  await t.test('only the owner can read the admin directory and recent access events', async () => {
+   const dashboard = await getAdminDashboard(owner);
+   assert.equal(dashboard.access.viewer.role, 'owner');
+   assert.ok(dashboard.access.accounts?.some(account => account.id === accountId && account.bound));
+   assert.ok(dashboard.events.some(event => event.action === 'account_created' && event.subject === 'auth-staff@example.test'));
+   assert.ok(dashboard.events.some(event => event.action === 'setup_link_created' && event.actor === email));
+   assert.deepEqual(Object.keys(dashboard.events[0]).sort(), ['action', 'actor', 'at', 'id', 'subject']);
+   const employee = { userId: staffId, email: 'auth-staff@example.test', displayName: 'Auth QA Telesales' };
+   await assert.rejects(getAdminDashboard(employee), { status: 403 });
   });
   await t.test('password change verifies current password and revokes every old session',async()=>{
    await assert.rejects(auth.changePassword(staffId,'wrong',nextStaffPassword),/không đúng/);

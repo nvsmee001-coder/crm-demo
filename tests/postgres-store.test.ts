@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { CRMIdentity, CRMResponse, Command } from '../lib/crm-types';
-import { CRMError } from '../lib/crm-engine';
+import { businessDate, CRMError } from '../lib/crm-engine';
+import { projectBalance } from '../lib/project-collections';
 
 // This suite resets its database. Run only against an explicitly disposable DB.
 const enabled=process.env.TEST_DATABASE_RESET==='1' && !!(process.env.TEST_DATABASE_URL || process.env.DATABASE_URL);
@@ -17,10 +18,11 @@ function expectStatus(status:number) {
 test('PostgreSQL persistence: isolation, revisions, atomic imports and access revocation',{skip:!enabled},async t=>{
   const {query,pool,withTransaction}=await import('../lib/database');
   const {getAccess,getAccessResponse,mutateAccess}=await import('../lib/access-store');
-  const {loadWorkspace,mutateWorkspace}=await import('../lib/crm-store');
+  const {loadWorkspace,mutateWorkspace,previewStaffExcel}=await import('../lib/crm-store');
   const owner:CRMIdentity={userId:randomUUID(),email:'owner-db@example.test',displayName:'Database QA owner'};
   const teleA:CRMIdentity={userId:randomUUID(),email:'tele-a-db@example.test',displayName:'Database QA A'};
   const teleB:CRMIdentity={userId:randomUUID(),email:'tele-b-db@example.test',displayName:'Database QA B'};
+  const sales:CRMIdentity={userId:randomUUID(),email:'sales-db@example.test',displayName:'Account khai thác'};
   process.env.SMEE_OWNER_EMAIL=owner.email;
   try {
     const exists=(await query<{present:string|null}>("SELECT to_regclass('public.crm_workspaces')::text AS present")).rows[0].present;
@@ -137,6 +139,163 @@ test('PostgreSQL persistence: isolation, revisions, atomic imports and access re
       assert.equal(old.data.customers.length,0);
       assert.equal(next.data.customers.length,3);
       await assert.rejects(mutateWorkspace('live',teleA,{action:'add_customer_note',id:customerA,data:{body:'forbidden after transfer'},expectedRevision:current.revision}),expectStatus(403));
+    });
+    await t.test('Account creates and updates a private prospect, preserving revision, attribution and owner visibility',async()=>{
+      current=await loadWorkspace('live',owner);
+      await command('create',{name:'Sales thử nghiệm',email:sales.email,role:'Sales',color:'#cc4411'},{collection:'team'});
+      const salesId=current.data.team.find(member=>member.email===sales.email)!.id;
+      const access=await getAccessResponse(owner);
+      await mutateAccess(owner,{action:'upsert',email:sales.email,teamMemberId:salesId,role:'account',active:true,expectedRevision:access.revision!});
+      const before=await loadWorkspace('live',sales);
+      assert.equal(before.data.customers.length,0);
+      const create:Command={action:'create_prospect',expectedRevision:before.revision,data:{name:'Khách do Sale tìm',phone:'0901234876',source:'Giới thiệu'}};
+      const next=await mutateWorkspace('live',sales,create);
+      const [customer]=next.data.customers;
+      assert.equal(next.data.customers.length,1);
+      assert.equal(next.createdCustomerId,customer.id);
+      assert.equal(customer.owner,salesId);
+      assert.equal(customer.prospectedBy,salesId);
+      assert.equal(customer.phone,'+84901234876');
+      assert.ok(next.data.activities.some(event=>event.kind==='create_prospect' && event.entityId===customer.id && event.actor===sales.displayName));
+      await assert.rejects(mutateWorkspace('live',sales,create),expectStatus(409));
+      await assert.rejects(mutateWorkspace('live',sales,{...create,expectedRevision:next.revision,
+        data:{name:'Số điện thoại đã có',phone:'0901111222'}}),expectStatus(400));
+      const update:Command={action:'update',collection:'customers',id:customer.id,expectedRevision:next.revision,
+        data:{status:'Đang tư vấn',priority:'Cao',nextAction:'Gửi báo giá',nextFollowUp:'2030-01-05'}};
+      const saved=await mutateWorkspace('live',sales,update);
+      assert.equal(saved.data.customers[0].priority,'Cao');
+      assert.equal(saved.data.customers[0].nextAction,'Gửi báo giá');
+      assert.equal(saved.data.customers[0].prospectedBy,salesId);
+      current=await loadWorkspace('live',owner);
+      assert.ok(current.data.customers.some(row=>row.id===customer.id && row.status==='Đang tư vấn'));
+      await command('update',{owner:'member-admin'},{collection:'customers',id:customer.id});
+      assert.deepEqual((await loadWorkspace('live',sales)).data.customers,[]);
+      await assert.rejects(mutateWorkspace('live',sales,{...update,expectedRevision:current.revision}),expectStatus(403));
+    });
+    await t.test('Telesales prospects enter the creator’s call queue and follow later reassignments',async()=>{
+      const access=await getAccessResponse(owner);
+      await mutateAccess(owner,{action:'upsert',id:accountA,role:'telesales',expectedRevision:access.revision!});
+      const before=await loadWorkspace('live',teleA);
+      const create:Command={action:'create_prospect',expectedRevision:before.revision,data:{name:'Khách theo cuộc gọi'}};
+      await assert.rejects(mutateWorkspace('live',teleA,create),expectStatus(400));
+      const saved=await mutateWorkspace('live',teleA,{...create,data:{...create.data,phone:'0901222333'}});
+      const customer=saved.data.customers.find(row=>row.id===saved.createdCustomerId)!;
+      assert.equal(customer.owner,memberA);
+      assert.equal(customer.prospectedBy,memberA);
+      assert.equal(customer.telesalesOwner,memberA);
+      assert.equal(customer.telesalesStatus,'Chờ gọi');
+      assert.ok(customer.telesalesQueuedAt);
+      assert.ok(!(await loadWorkspace('live',teleB)).data.customers.some(row=>row.id===customer.id));
+      const call:Command={action:'log_telesales_call',expectedRevision:saved.revision,id:customer.id,
+        data:{outcome:'Hẹn gọi lại',note:'Khách hẹn trao đổi tiếp',nextFollowUp:'2030-01-05'}};
+      await assert.rejects(mutateWorkspace('live',teleB,call),expectStatus(403));
+      const logged=await mutateWorkspace('live',teleA,call);
+      assert.equal(logged.data.customers.find(row=>row.id===customer.id)?.telesalesStatus,'Hẹn gọi lại');
+      current=await loadWorkspace('live',owner);
+      await command('transfer_to_telesales',{owner:memberB,ids:[customer.id],note:'Đổi người phụ trách cuộc gọi'});
+      assert.ok(!(await loadWorkspace('live',teleA)).data.customers.some(row=>row.id===customer.id));
+      const transferred=(await loadWorkspace('live',teleB)).data.customers.find(row=>row.id===customer.id);
+      assert.equal(transferred?.prospectedBy,memberA);
+      assert.equal(transferred?.telesalesOwner,memberB);
+    });
+    await t.test('staff Excel preflight and commit share validation, ownership, privacy and revision rules',async()=>{
+      current=await loadWorkspace('live',owner);
+      const hiddenName='Hồ sơ chỉ quản lý thấy';
+      await command('create',{name:hiddenName,owner:'member-admin',phone:'0907721000'},{collection:'customers'});
+      for(const [index,user] of [sales,teleA].entries()) {
+        const rows=[
+          {rowNumber:4,data:{name:'Khách A',phone:'090772101'+index,source:'Sự kiện',priority:'Cao',nextAction:'Gọi lại',nextFollowUp:'2030-05-21'}},
+          {rowNumber:7,data:{name:'Khách thứ hai',phone:'090772102'+index}},
+          {rowNumber:12,data:{name:'Trùng công ty',phone:'+84907721000'}},
+          {rowNumber:14,data:{name:'Trùng dòng trong file',phone:'090772101'+index}},
+          {rowNumber:15,data:{name:'Thiếu số điện thoại',phone:''}},
+        ];
+        const preview=await previewStaffExcel(user,rows);
+        assert.deepEqual(preview.rows.map(row=>row.status),['ready','ready','duplicate','duplicate','invalid']);
+        assert.match(preview.rows[3].message,/dòng 4/);
+        assert.ok(!JSON.stringify(preview).includes(hiddenName));
+        assert.ok(!('owner' in preview.rows[0].customer));
+        const request:Command={action:'import_prospects',expectedRevision:preview.revision,data:{sourceFile:'thu.xlsx',rows}};
+        await assert.rejects(mutateWorkspace('live',user,request),(e:unknown)=>e instanceof CRMError && e.status===400 && e.message.includes('12') && !e.message.includes(hiddenName));
+        assert.equal((await loadWorkspace('live',user)).revision,preview.revision);
+        const forged=[{...rows[0],data:{...rows[0].data,owner:'member-admin'}}];
+        await assert.rejects(previewStaffExcel(user,forged),expectStatus(403));
+        await assert.rejects(mutateWorkspace('live',user,{...request,data:{...request.data,rows:forged}}),expectStatus(403));
+        await assert.rejects(previewStaffExcel(user,[...rows,rows[0]]),expectStatus(400));
+        await assert.rejects(previewStaffExcel(user,Array(501).fill(rows[0])),expectStatus(400));
+        await assert.rejects(previewStaffExcel(owner,rows),expectStatus(403));
+        const valid={...request,data:{sourceFile:'thu.xlsx',rows:rows.slice(0,2)}};
+        const saved=await mutateWorkspace('live',user,valid);
+        const ids=saved.createdCustomerIds!;
+        assert.equal(saved.revision,preview.revision+1);
+        assert.equal(ids.length,2);
+        await assert.rejects(mutateWorkspace('live',user,valid),expectStatus(409));
+        const imported=saved.data.customers.filter(c=>ids.includes(c.id));
+        assert.equal(imported.length,2);
+        assert.equal(imported[0].source,'Sự kiện');
+        assert.equal(imported[0].nextFollowUp,'2030-05-21');
+        for(const record of imported) {
+          assert.equal(record.owner,saved.user.memberId);
+          assert.equal(record.prospectedBy,saved.user.memberId);
+          assert.ok(saved.data.activities.some(a=>a.kind==='import_prospects' && a.actor===user.displayName && a.entityId===record.id));
+          if(user===teleA){
+            assert.equal(record.telesalesOwner,memberA);
+            assert.equal(record.telesalesStatus,'Chờ gọi');
+            assert.ok(record.telesalesQueuedAt);
+          } else assert.ok(!record.telesalesOwner);
+        }
+        assert.ok(!(await loadWorkspace('live',teleB)).data.customers.some(c=>ids.includes(c.id)));
+      }
+    });
+    await t.test('a 500-row employee workbook commits in one revision',async()=>{
+      const rows=Array.from({length:500},(_,index)=>({
+        rowNumber:index+2,data:{name:'Khách Excel '+index,phone:'0909'+String(index).padStart(6,'0'),source:'Sự kiện'},
+      }));
+      const preview=await previewStaffExcel(sales,rows);
+      assert.equal(preview.rows.filter(row=>row.status==='ready').length,500);
+      const saved=await mutateWorkspace('live',sales,{
+        action:'import_prospects',expectedRevision:preview.revision,data:{sourceFile:'500-khach.xlsx',rows},
+      });
+      assert.equal(saved.revision,preview.revision+1);
+      assert.equal(new Set(saved.createdCustomerIds).size,500);
+      assert.equal(saved.data.customers.filter(customer=>customer.name.startsWith('Khách Excel ')).length,500);
+    });
+    await t.test('owner receipts persist across reads, reject stale retries and preserve audit after cancellation',async()=>{
+      current=await loadWorkspace('live',owner);
+      await command('create',{name:'Hợp đồng đối soát',customerId:customerA,serviceId:current.data.services[0].id,owner:'member-admin',budget:1000000,scope:'Hạng mục hợp đồng'}, {collection:'projects'});
+      const id=current.data.projects[0].id;
+      const today=businessDate();
+      await command('open_project_ledger',{openingAmount:300000,paymentDue:today},{id});
+      const write:Command={action:'record_project_receipt',id,data:{amount:200000,date:today,reference:'QA-01'},expectedRevision:current.revision};
+      const saved=await mutateWorkspace('live',owner,write);
+      await assert.rejects(mutateWorkspace('live',owner,write),expectStatus(409));
+      current=await loadWorkspace('live',owner);
+      assert.equal(current.revision,saved.revision);
+      assert.deepEqual(projectBalance(current.data.projects[0],today),{paid:500000,outstanding:500000,overdue:false});
+      const receipt=current.data.projects[0].ledger!.receipts.find(r=>r.reference==='QA-01')!;
+      const reason='Sai mã hợp đồng';
+      await command('void_project_receipt',{receiptId:receipt.id,reason},{id});
+      current=await loadWorkspace('live',owner);
+      const ledger=current.data.projects[0].ledger!;
+      assert.equal(ledger.receipts.find(r=>r.id===receipt.id)?.voided?.reason,reason);
+      assert.equal(projectBalance(current.data.projects[0],today)?.paid,300000);
+      assert.ok(current.data.activities.some(event=>event.kind==='void_project_receipt' && event.actor===owner.displayName));
+      const staff=await loadWorkspace('live',sales);
+      assert.equal(staff.data.projects.length,0);
+      assert.equal(staff.data.activities.some(a=>a.kind==='record_project_receipt'),false);
+      await assert.rejects(mutateWorkspace('live',sales,{...write,expectedRevision:current.revision}),expectStatus(403));
+      const access=await getAccessResponse(owner);
+      await mutateAccess(owner,{action:'upsert',id:accountA,role:'manager',expectedRevision:access.revision!});
+      const manager=await loadWorkspace('live',teleA);
+      assert.deepEqual(manager.data.projects[0].ledger,ledger);
+      await assert.rejects(mutateWorkspace('live',teleA,{...write,expectedRevision:manager.revision}),expectStatus(403));
+      const edit:Command={action:'update',collection:'projects',id,data:{budget:310000},expectedRevision:manager.revision};
+      await assert.rejects(mutateWorkspace('live',teleA,edit),expectStatus(403));
+      await mutateWorkspace('live',teleA,{...edit,data:{budget:1000000,scope:'Phạm vi đã cập nhật'}});
+      current=await loadWorkspace('live',owner);
+      await command('update',{budget:900000},{id,collection:'projects'});
+      assert.deepEqual(current.data.activities[0].details?.budget,{before:1000000,after:900000});
+      assert.equal(projectBalance(current.data.projects[0],today)?.outstanding,600000);
     });
   } finally {
     await pool.end();

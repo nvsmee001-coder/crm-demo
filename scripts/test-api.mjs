@@ -128,12 +128,49 @@ try{
     }
     status(await request('/api/auth/invite',{method:'POST',cookie:teleA.cookie,body:{accountId:accountB}}),403);
   });
+  await check('admin page and directory are available only to the signed-in owner', async () => {
+    const guestPage = await request('/admin');
+    status(guestPage, 307);
+    const signIn = new URL(guestPage.response.headers.get('location'), origin);
+    assert.equal(signIn.pathname, '/login');
+    assert.equal(signIn.searchParams.get('returnTo'), '/admin');
+    status(await request('/api/admin'), 401);
+
+    const ownerPage = status(await request('/admin', {cookie: owner.cookie}), 200);
+    assert.ok(ownerPage.includes('Quản trị hệ thống'));
+    const dashboard = status(await request('/api/admin', {cookie: owner.cookie}), 200);
+    assert.equal(dashboard.access.viewer.role, 'owner');
+    assert.equal(dashboard.access.accounts.length, 2);
+    assert.ok(dashboard.events.some(event => event.action === 'account_created'));
+
+    const employeePage = await request('/admin', {cookie: teleA.cookie});
+    status(employeePage, 307);
+    assert.equal(new URL(employeePage.response.headers.get('location'), origin).pathname, '/');
+    status(await request('/api/admin', {cookie: teleA.cookie}), 403);
+  });
   await check('import normalizes phones and duplicate batch rolls back completely',async()=>{
     const response=status(await mutate(owner.cookie,{action:'import_customers',data:{owner:'member-admin',sourceFile:'http-qa.xlsx',rows:[{name:'HTTP Customer A',phone:'0901111222'},{name:'HTTP Customer B',phone:'0902222333'},{name:'HTTP Customer C',phone:'0903333444'}]}}),200);
     [customerA,customerB,customerC]=['HTTP Customer A','HTTP Customer B','HTTP Customer C'].map(name=>response.data.customers.find(customer=>customer.name===name).id);
     assert.equal(response.data.customers.find(customer=>customer.id===customerA).phone,'+84901111222');
     status(await mutate(owner.cookie,{action:'import_customers',data:{owner:'member-admin',sourceFile:'dup.xlsx',rows:[{name:'Must Roll Back',phone:'0904444555'},{name:'Duplicate',phone:'+84 901 111 222'}]}}),400);
     const after=await workspace(owner.cookie);assert.equal(after.revision,response.revision);assert.equal(after.data.customers.length,3);
+  });
+  await check('employee Excel preview hides foreign customers and imports only self-owned prospects',async()=>{
+    const rows=[
+      {rowNumber:2,data:{name:'HTTP Staff Prospect',phone:'0906666777'}},
+      {rowNumber:3,data:{name:'HTTP Duplicate Input',phone:'0901111222'}},
+    ];
+    const preview=status(await request('/api/crm/import-preview',{method:'POST',cookie:teleA.cookie,body:{rows}}),200);
+    assert.deepEqual(preview.rows.map(row=>row.status),['ready','duplicate']);
+    assert.ok(!JSON.stringify(preview).includes('HTTP Customer A'));
+    assert.ok(!('owner' in preview.rows[0].customer));
+    status(await request('/api/crm/import-preview',{method:'POST',cookie:teleA.cookie,body:{rows:[{rowNumber:2,data:{...rows[0].data,owner:memberB}}]}}),403);
+    const saved=status(await mutate(teleA.cookie,{action:'import_prospects',data:{sourceFile:'staff-http.xlsx',rows:[rows[0]]}}),200);
+    const id=saved.createdCustomerIds[0],prospect=saved.data.customers.find(customer=>customer.id===id);
+    assert.equal(prospect.owner,memberA);assert.equal(prospect.telesalesOwner,memberA);assert.equal(prospect.prospectedBy,memberA);
+    assert.ok(!(await workspace(teleB.cookie)).data.customers.some(customer=>customer.id===id));
+    assert.ok((await workspace(owner.cookie)).data.customers.some(customer=>customer.id===id));
+    status(await mutate(owner.cookie,{action:'delete',collection:'customers',id}),200);
   });
   await check('bulk assignment returns only each employee assigned customers',async()=>{
     status(await mutate(owner.cookie,{action:'distribute_customers',data:{assignments:[{owner:memberA,ids:[customerA,customerB]},{owner:memberB,ids:[customerC]}],note:'HTTP QA handoff',nextFollowUp:'2030-01-01',allowReassign:false}}),200);
@@ -143,6 +180,23 @@ try{
     status(await mutate(teleA.cookie,{action:'distribute_customers',data:{assignments:[]}}),403);
     status(await request('/api/export?mode=live',{cookie:teleA.cookie}),403);
     assert.equal(status(await request('/api/export?mode=live',{cookie:owner.cookie}),200).format,'smee-crm-backup');
+  });
+  await check('unchanged reads transfer no body and keep the validator private to each viewer',async()=>{
+    const first=await request('/api/crm?mode=live',{cookie:teleA.cookie});
+    assert.ok(status(first,200).data.customers.length);
+    assert.equal(first.data.storage,undefined);
+    const tag=first.response.headers.get('etag');
+    assert.ok(tag);
+    const headers={'If-None-Match':tag};
+    const same=await request('/api/crm?mode=live',{cookie:teleA.cookie,headers});
+    status(same,304);
+    assert.equal(same.bytes.length,0);
+    assert.match(same.response.headers.get('cache-control'),/private/);
+    assert.equal(status(await request('/api/crm?mode=live',{cookie:teleB.cookie,headers}),200).data.customers[0].id,customerC);
+    status(await request('/api/crm?mode=demo',{cookie:teleA.cookie,headers}),403);
+    const ownerRead=await workspace(owner.cookie);
+    assert.equal(ownerRead.storage.limitBytes,1_800_000);
+    assert.ok(ownerRead.storage.usedBytes>0);
   });
   await check('valid scanned uploads stay private and staff download follows customer scope',async()=>{
     const saved=status(await upload(owner.cookie,png),201);fileUrl=saved.url;
@@ -172,9 +226,14 @@ try{
     assert.equal(response.status,413);await response.arrayBuffer();
   });
   await check('disabling employee revokes sessions and blocks telesales allocation',async()=>{
+    const ownerTag=(await request('/api/crm?mode=live',{cookie:owner.cookie})).response.headers.get('etag');
+    const oldTag=(await request('/api/crm?mode=live',{cookie:teleB.cookie})).response.headers.get('etag');
     const invite=status(await request('/api/auth/invite',{method:'POST',cookie:owner.cookie,body:{accountId:accountB}}),200);
     const token=new URLSearchParams(new URL(invite.url).hash.slice(1)).get('token');
     status(await changeAccount(owner.cookie,{action:'set_status',id:accountB,active:false}),200);
+    const changed=status(await request('/api/crm?mode=live',{cookie:owner.cookie,headers:{'If-None-Match':ownerTag}}),200);
+    assert.ok(!changed.telesalesAssignees.some(row=>row.id===memberB));
+    status(await request('/api/crm?mode=live',{cookie:teleB.cookie,headers:{'If-None-Match':oldTag}}),401);
     status(await request('/api/crm?mode=live',{cookie:teleB.cookie}),401);
     status(await mutate(owner.cookie,{action:'distribute_customers',data:{assignments:[{owner:memberB,ids:[customerA]}],note:'must fail',nextFollowUp:'2030-01-01',allowReassign:true}}),400);
     status(await changeAccount(owner.cookie,{action:'set_status',id:accountB,active:true}),200);
@@ -183,10 +242,40 @@ try{
     teleB=await login('b-http@example.test',employeePassword);
   });
   await check('reassignment immediately removes old employee record and file access',async()=>{
+    const oldTag=(await request('/api/crm?mode=live',{cookie:teleA.cookie})).response.headers.get('etag');
     status(await mutate(owner.cookie,{action:'distribute_customers',data:{assignments:[{owner:memberB,ids:[customerA]}],note:'HTTP transfer',nextFollowUp:'2030-01-01',allowReassign:true}}),200);
-    assert.deepEqual((await workspace(teleA.cookie)).data.customers.map(c=>c.id),[customerB]);
+    const changed=status(await request('/api/crm?mode=live',{cookie:teleA.cookie,headers:{'If-None-Match':oldTag}}),200);
+    assert.deepEqual(changed.data.customers.map(c=>c.id),[customerB]);
     status(await request(fileUrl,{cookie:teleA.cookie}),404);status(await request(fileUrl,{cookie:teleB.cookie}),200);
     status(await mutate(teleA.cookie,{action:'add_customer_note',id:customerA,data:{body:'forbidden after transfer'}}),403);
+  });
+  await check('receipt ledger persists owner writes while manager and staff remain read-restricted',async()=>{
+    const initial=await workspace(owner.cookie);
+    const created=status(await mutate(owner.cookie,{action:'create',collection:'projects',data:{
+      name:'HTTP Ledger Contract',customerId:customerA,serviceId:initial.data.services[0].id,
+      owner:'member-admin',budget:1000000,cost:0,scope:'HTTP collection fixture',
+    }}),200);
+    const id=created.data.projects.find(project=>project.name==='HTTP Ledger Contract').id;
+    const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Ho_Chi_Minh'}).format(new Date());
+    status(await mutate(owner.cookie,{action:'open_project_ledger',id,data:{openingAmount:200000}}),200);
+    const paid=status(await mutate(owner.cookie,{action:'record_project_receipt',id,data:{amount:300000,date:today,reference:'HTTP-RECEIPT-1'}}),200);
+    const receipt=paid.data.projects.find(project=>project.id===id).ledger.receipts.find(row=>row.reference==='HTTP-RECEIPT-1');
+    assert.equal(receipt.createdBy,'HTTP QA Owner');
+    const read=(await workspace(owner.cookie)).data.projects.find(project=>project.id===id);
+    assert.equal(read.ledger.receipts.filter(row=>!row.voided).reduce((sum,row)=>sum+row.amount,0),500000);
+    status(await mutate(teleA.cookie,{action:'record_project_receipt',id,data:{amount:1,date:today,reference:'DENIED'}}),403);
+    assert.equal((await workspace(teleA.cookie)).data.projects.length,0);
+    status(await changeAccount(owner.cookie,{action:'upsert',id:accountB,role:'manager'}),200);
+    const manager=await login('b-http@example.test',employeePassword);
+    assert.deepEqual((await workspace(manager.cookie)).data.projects.find(project=>project.id===id).ledger,read.ledger);
+    status(await request('/api/admin',{cookie:manager.cookie}),403);
+    status(await mutate(manager.cookie,{action:'record_project_receipt',id,data:{amount:1,date:today,reference:'DENIED'}}),403);
+    status(await mutate(manager.cookie,{action:'update',collection:'projects',id,data:{budget:1500000}}),403);
+    status(await mutate(owner.cookie,{action:'void_project_receipt',id,data:{receiptId:receipt.id,reason:'HTTP test correction'}}),200);
+    const corrected=(await workspace(owner.cookie)).data.projects.find(project=>project.id===id);
+    assert.equal(corrected.ledger.receipts.filter(row=>!row.voided).reduce((sum,row)=>sum+row.amount,0),200000);
+    assert.equal(corrected.ledger.receipts.find(row=>row.id===receipt.id).voided.reason,'HTTP test correction');
+    status(await mutate(owner.cookie,{action:'delete',collection:'projects',id}),400);
   });
   await check('password changes revoke old sessions and require new password',async()=>{
     const nextPassword=randomBytes(24).toString('hex');

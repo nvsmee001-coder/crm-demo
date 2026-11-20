@@ -10,6 +10,8 @@
 }
 
 {$APP_DOMAIN} {
+  @publicAssets path /_next/static/* /brand/* /fonts/*
+  encode @publicAssets zstd gzip
   request_body {
     max_size 11MB
   }

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyCommand, businessDate, CRMError, normalizeWorkspace, normalizePhone, normalizeTelegram, previewCustomerImport } from '../lib/crm-engine.js';
 import type { Command, Workspace } from '../lib/crm-types.js';
+import { collectionTotals, projectBalance } from '../lib/project-collections.js';
 
 const now='2026-11-17T18:30:00.000Z';
 const run=(w:Workspace,command:Omit<Command,'expectedRevision'>)=>applyCommand(w,{...command,expectedRevision:0},'Quản trị',now);
@@ -40,6 +41,64 @@ test('project completion ignores archived change requests but respects open work
   w.contents[0].status='Đã đăng';assert.throws(()=>run(w,{action:'complete_project',id:'p1',data:{acceptance:'Khách nghiệm thu'}}),/vướng mắc/);
   w.issues[0].status='Đã giải quyết';assert.throws(()=>run(w,{action:'complete_project',id:'p1'}),/Bằng chứng nghiệm thu/);
   const done=run(w,{action:'complete_project',id:'p1',data:{acceptance:'Biên bản nghiệm thu'}});assert.equal(done.projects[0].status,'Hoàn tất');assert.equal(done.changes[0].status,'Chờ duyệt');
+});
+
+test('receivables use verified opening amounts and a separate agreed payment due date', () => {
+  const w = fixture();
+  const today = businessDate(now);
+  w.projects[0].dueDate = '2026-11-10';
+  w.projects[0].status = 'Hoàn tất';
+  const post = (state: Workspace, action: Command['action'], data: Record<string, unknown>) =>
+    applyCommand(state, {action, id: 'p1', data, expectedRevision: 0}, 'Chủ sở hữu', now, {role:'owner'});
+  assert.equal(projectBalance(w.projects[0], today), undefined);
+  assert.equal(collectionTotals(w.projects, today).overdue, BigInt(0));
+  assert.throws(() => post(w, 'open_project_ledger', {}), /Tổng đã thu/);
+  const opened = post(w, 'open_project_ledger', {openingAmount: 1000000});
+  assert.deepEqual(projectBalance(opened.projects[0], today), {paid:1000000, outstanding:9000000, overdue:false});
+  assert.equal(w.projects[0].ledger, undefined);
+  assert.throws(() => post(opened, 'open_project_ledger', {openingAmount:0}), /đã mở sổ/);
+  const due = post(opened, 'set_payment_due', {paymentDue:today});
+  assert.equal(projectBalance(due.projects[0], today)?.overdue, false);
+  const late = post(due, 'set_payment_due', {paymentDue:'2026-11-17'});
+  assert.equal(collectionTotals(late.projects, today).overdue, BigInt(9000000));
+  const receipt = {amount:9000000, date:today, reference:'BK001'};
+  for (const changes of [{amount:0},{amount:1.5},{amount:9000001},{date:'2026-11-20'},{date:'2026-11-17'},{date:'2026-02-31'},{reference:'  '}]) {
+    assert.throws(() => post(late, 'record_project_receipt', {...receipt, ...changes}), CRMError);
+  }
+  const settled = post(late, 'record_project_receipt', {...receipt, createdBy:'Giả mạo'});
+  assert.deepEqual(projectBalance(settled.projects[0], today), {paid:10000000,outstanding:0,overdue:false});
+  const entry = settled.projects[0].ledger!.receipts[0];
+  assert.equal(entry.createdAt, now);
+  assert.equal(entry.createdBy, 'Chủ sở hữu');
+  const cancel = {receiptId:entry.id, reason:'Phiếu ghi nhầm hợp đồng'};
+  assert.throws(() => post(settled,'void_project_receipt',{...cancel,reason:' '}), /lý do/);
+  const voided = post(settled,'void_project_receipt',cancel);
+  assert.deepEqual(voided.projects[0].ledger!.receipts[0].voided, {at:now, by:'Chủ sở hữu', reason:cancel.reason});
+  assert.deepEqual(projectBalance(voided.projects[0],today), {paid:1000000,outstanding:9000000,overdue:true});
+  assert.throws(() => post(voided,'void_project_receipt',cancel), /đã được hủy/);
+  const cleared = post(voided,'set_payment_due',{paymentDue:''});
+  assert.equal(projectBalance(cleared.projects[0],today)?.overdue, false);
+});
+
+test('receipt evidence survives corrections, prevents deletion, bad budgets and duplicate vouchers', () => {
+  const w = fixture();
+  const post = (state: Workspace, action: Command['action'], data: Record<string, unknown>) =>
+    applyCommand(state,{action,id:'p1',data,expectedRevision:0},'Chủ',now,{role:'owner'});
+  const opened = post(w,'open_project_ledger',{openingAmount:0});
+  const receipt = {amount:500000,date:businessDate(now),reference:'PT-1'};
+  const paid = post(opened,'record_project_receipt',receipt);
+  assert.throws(() => post(paid,'record_project_receipt',{...receipt,reference:' pt-1 '}), /Mã chứng từ/);
+  const entry = paid.projects[0].ledger!.receipts.find(r => r.kind === 'opening')!;
+  assert.throws(() => post(paid,'void_project_receipt',{receiptId:entry.id,reason:'nhầm',openingAmount:10000000}), /sau điều chỉnh/);
+  const revised = post(paid,'void_project_receipt',{receiptId:entry.id,reason:'Đối chiếu bổ sung',openingAmount:1200000});
+  assert.equal(projectBalance(revised.projects[0],businessDate(now))?.paid,1700000);
+  assert.ok(revised.projects[0].ledger!.receipts.find(r => r.id === entry.id)?.voided);
+  assert.equal(revised.projects[0].ledger!.receipts.filter(r => r.kind === 'opening' && !r.voided).length, 1);
+  assert.throws(() => run(revised,{action:'delete',collection:'projects',id:'p1'}), /sổ thu tiền/);
+  assert.throws(() => run(revised,{action:'update',collection:'projects',id:'p1',data:{budget:1500000}}), /ít nhất/);
+  const edited=run(revised,{action:'update',collection:'projects',id:'p1',data:{budget:1900000,ledger:{receipts:[]}}});
+  assert.deepEqual(edited.projects[0].ledger, revised.projects[0].ledger);
+  assert.equal(projectBalance(edited.projects[0],businessDate(now))?.outstanding,200000);
 });
 test('winning a deal creates a linked project once using the Vietnam business date',()=>{
   const won=run(fixture(),{action:'win_deal',id:'d1'});assert.equal(won.projects.length,2);assert.equal(won.deals[0].stage,'Đã chốt');assert.equal(won.projects[1].startDate,'2026-11-18');assert.equal(won.projects[1].dueDate,'2027-02-16');assert.equal(won.deals[0].projectId,won.projects[1].id);

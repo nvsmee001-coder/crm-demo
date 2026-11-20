@@ -1,0 +1,64 @@
+.panel {
+  padding: clamp(16px, 2.3vw, 26px);
+  margin: 0 0 20px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  color: var(--ink);
+}
+.header, .filters, .pages, .owner { display: flex; align-items: center; gap: 8px; }
+.header { justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px; }
+.header h2 { font-size: 1.1rem; font-weight: 700; }
+.header p, .record small, .empty, .pages span { font-size: .8rem; color: #63636d; }
+.header p { margin-top: 4px; }
+.owner { flex-wrap: wrap; font-size: .8rem; font-weight: 600; max-width: 100%; }
+.owner select {
+  font: inherit;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+}
+.filters { flex-wrap: wrap; margin: 18px 0 8px; }
+.filters button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: #555561;
+  font-size: .78rem;
+  font-weight: 550;
+  background: white;
+}
+.filters button[aria-pressed=true] { border-color: #edb4ac; color: #9e231b; background: #fff3f1; }
+.filters span { font-variant-numeric: tabular-nums; margin-left: 3px; }
+.list { list-style: none; padding: 0; margin: 0; }
+.list li + li { border-top: 1px solid var(--border); }
+.row {
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) 18px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 6px;
+  text-align: left;
+}
+.row:hover, .row:focus-visible { background: #fcf5f4; }
+.row:focus-visible, .filters button:focus-visible, .owner select:focus-visible { outline: 2px solid var(--brand-strong); outline-offset: 1px; }
+.record, .reason { overflow-wrap: anywhere; }
+.record strong, .record small { display: block; }
+.record strong { font-size: .9rem; font-weight: 650; }
+.reason { font-size: .83rem; }
+.reason small { display: flex; align-items: center; gap: 5px; color: #9b3427; font-size: .75rem; }
+.arrow { color: var(--brand-strong); }
+.empty { padding: 16px 2px 4px; }
+.pages { justify-content: flex-end; flex-wrap: wrap; margin-top: 8px; }
+.pages span { margin-right: auto; }
+@media (max-width: 600px) {
+  .row { grid-template-columns: minmax(0, 1fr) 18px; gap: 4px 10px; }
+  .record, .reason { grid-column: 1; }
+  .arrow { grid-column: 2; grid-row: 1 / 3; }
+  .filters { gap: 5px; }
+}

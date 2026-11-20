@@ -46,7 +46,11 @@ SMEE_HTTP_PORT=3180
 Compose đọc `COMPOSE_FILE` từ `.env`, nên các lệnh `docker compose` và script
 backup/restore trong repo cùng sử dụng cấu hình Nginx này. Chạy từ thư mục
 repo và giữ lựa chọn đó trong `.env`; không ghép thêm file cấu hình Caddy.
-Các lệnh dưới đây dùng `sudo` vì tài khoản SSH có thể chưa thuộc nhóm Docker:
+Các lệnh dưới đây dùng `sudo` vì tài khoản SSH có thể chưa thuộc nhóm Docker.
+
+Với tài khoản chưa có quyền Docker, chạy sao lưu bằng `sudo bash deploy/backup.sh`.
+Khi phục hồi, dùng `sudo env SMEE_RESTORE_CONFIRM=ERASE_CURRENT_DATA bash deploy/restore.sh /duong/dan/backup`;
+chỉ thực hiện sau khi đã đọc mục 8 và chuẩn bị bản sao dự phòng. Kiểm tra cấu hình:
 
 ```bash
 sudo docker compose config --quiet
@@ -98,7 +102,7 @@ Kiểm tra:
 sudo docker version
 sudo docker compose version
 sudo apt-get update
-sudo apt-get install -y unzip python3 openssl
+sudo apt-get install -y unzip python3 openssl util-linux
 ```
 
 Các lệnh `docker` bên dưới giả định tài khoản SSH đã được cấp quyền chạy Docker. Nếu chưa, thêm `sudo` trước lệnh. Quyền Docker tương đương quyền quản trị máy; chỉ cấp cho người vận hành tin cậy.
@@ -107,12 +111,12 @@ Các lệnh `docker` bên dưới giả định tài khoản SSH đã được c
 
 Tải ZIP lên VPS bằng SFTP/SCP. Giải nén vào thư mục riêng, ví dụ `/opt/smee-crm`, rồi đứng trong thư mục chứa `compose.yaml`:
 
-Gói `SMEE-CRM-VPS-full-source.zip` có thư mục gốc `smee-crm/`. Ví dụ với VPS mới, từ máy cá nhân tải ZIP vào thư mục home của tài khoản SSH; thay tên tài khoản và IP bằng thông tin của bạn:
+Gói ZIP bàn giao có thư mục gốc `smee-crm/`. Ví dụ bên dưới dùng tên `crm-source.zip`. Đổi tên gói vừa tải thành tên này, rồi thay tên tài khoản SSH và IP bằng thông tin của bạn.
 
 ```bash
-scp SMEE-CRM-VPS-full-source.zip tai_khoan_ssh@IP_VPS:~/
+scp crm-source.zip tai_khoan_ssh@IP_VPS:~/
 ssh tai_khoan_ssh@IP_VPS
-sudo unzip "$HOME/SMEE-CRM-VPS-full-source.zip" -d /opt
+sudo unzip "$HOME/crm-source.zip" -d /opt
 sudo chown -R "$(id -un):$(id -gn)" /opt/smee-crm
 ```
 
@@ -136,7 +140,7 @@ POSTGRES_PASSWORD=CHUOI_64_KY_TU_HEX_VUA_TAO
 ```
 
 - `APP_DOMAIN`: chỉ tên miền, không có `https://`, đường dẫn hay dấu `/` cuối.
-- `APP_ORIGIN`: URL HTTPS chính xác, không có đường dẫn/dấu `/` cuối. App dùng giá trị này để kiểm tra nguồn yêu cầu và tạo link đặt mật khẩu.
+- `APP_ORIGIN` phải bằng `https://` ghép với `APP_DOMAIN`. App kiểm tra hai biến trước khi chạy migration để các liên kết đặt mật khẩu và yêu cầu lưu dữ liệu dùng đúng tên miền Caddy đang phục vụ.
 - `SMEE_OWNER_EMAIL`: email đăng nhập của người quản lý toàn bộ công ty. Không phải tài khoản ChatGPT.
 - `POSTGRES_PASSWORD`: dùng chuỗi hex ngẫu nhiên vừa tạo. Chuỗi hex tránh lỗi ký tự đặc biệt trong URL database/biến Docker. Không dùng giá trị minh họa.
 - Mật khẩu đăng nhập chủ sở hữu được nhập riêng ở bước 5, không đặt trong `.env`.
@@ -196,7 +200,7 @@ docker compose ps
 curl --fail --silent --show-error https://crm.congty.vn/api/health
 ```
 
-Mở `https://crm.congty.vn/login`, đăng nhập bằng email và mật khẩu vừa tạo. Chuyển sang **Dữ liệu công ty** để làm việc thật. **Dữ liệu mẫu** tách riêng và chỉ chủ sở hữu được dùng.
+Mở `https://crm.congty.vn/admin` trên tên miền đã cấu hình, đăng nhập bằng tài khoản chủ sở hữu vừa tạo để quản lý nhân viên. Trang chính `/` mở không gian CRM. Chuyển sang **Dữ liệu công ty** để làm việc thật. **Dữ liệu mẫu** dành cho chủ sở hữu dùng thử.
 
 `/api/health` chỉ phục vụ kiểm tra sức khỏe tối thiểu, không trả dữ liệu khách hàng hoặc bí mật. Nếu không lên HTTPS, xem log Caddy và kiểm tra DNS/cổng trước khi sửa ứng dụng:
 
@@ -208,13 +212,13 @@ docker compose logs --tail=100 postgres
 
 Không dùng `npm run dev` hoặc `wrangler dev` để chạy production.
 
-## 6. Cấp tài khoản cho telesales
+## 6. Cấp tài khoản cho Account và Telesales
 
 1. Vào **Cài đặt → Danh bạ đội ngũ**, tạo nhân sự.
-2. Trong **Tài khoản nhân viên**, chọn nhân sự, email và role **Telesales**; lưu.
+2. Vào **Quản trị → Tài khoản** (`/admin`), chọn nhân sự, email và quyền **Account** hoặc **Telesales**, rồi lưu.
 3. Bấm **Đặt mật khẩu** cho tài khoản đó để tạo link hiệu lực 1 giờ. Chủ sở hữu chuyển link qua kênh riêng đã xác minh với nhân viên. App chưa tự gửi email.
 4. Nhân viên mở link, đặt mật khẩu và đăng nhập cùng domain. Link dùng một lần và có hạn; tạo link mới nếu hết hạn.
-5. Giao khách trong **Khách hàng → Phân chia telesales**. Telesales chỉ đọc/sửa những trường cho phép trên khách được giao. Không tự xem khách của người khác hoặc tự cấp quyền.
+5. Chủ sở hữu giao khách trong CRM. Account và Telesales đều có thể bấm **Thêm khách tự khai thác** hoặc **Nhập Excel** từ trang của mình. Khách vừa tạo được giao cho chính nhân viên đang đăng nhập. Nhân viên theo dõi kết quả và lịch liên hệ trong phạm vi hồ sơ được phân công.
 
 Khi khóa tài khoản hoặc chuyển khách sang người khác, quyền được kiểm tra lại ở máy chủ. Link đặt lại mật khẩu mới sẽ thay thế link cũ và hoàn tất đặt lại sẽ thu hồi các phiên đăng nhập cũ. Đăng xuất dùng thao tác POST có kiểm tra nguồn yêu cầu.
 
@@ -240,7 +244,13 @@ Gói này có script sao lưu:
 bash deploy/backup.sh
 ```
 
-Script dừng app ngắn để dữ liệu và tệp nhất quán, tạo thư mục có timestamp dưới `backups/`, xuất `database.dump`, `uploads.tar.gz`, `manifest.json`, `SHA256SUMS`, rồi khởi động lại app nếu trước đó đang chạy. Có thể đổi vị trí bằng `SMEE_BACKUP_DIR=/duong/dan/rieng`.
+Script dừng app trong lúc chụp database và tệp. Nếu app đang chạy trước đó, script khởi động lại và đợi app báo khỏe. Sau đó script kiểm tra đủ ba checksum, đọc toàn bộ archive tệp và yêu cầu PostgreSQL giải mã toàn bộ dump trước khi chuyển bản sao từ thư mục tạm `.partial-*` sang `backups/smee-*`. Chỉ đưa thư mục đã hoàn thành sang kho dự phòng. Đặt `SMEE_BACKUP_DIR=/duong/dan/rieng` để chọn nơi lưu khác. Các lệnh sao lưu và khôi phục dùng cùng một khóa trong thư mục cài đặt, kể cả khi chạy từ cron. Luôn vận hành từ một bản cài cho mỗi bộ volume.
+
+Kiểm tra bản sao sau khi tải về máy khác, bằng Python 3.9 trở lên. Lệnh này đọc các tệp tại chỗ và kiểm tra tính toàn vẹn của bản sao. Thử phục hồi trên một bộ volume riêng để kiểm chứng khả năng phục hồi nghiệp vụ.
+
+```bash
+python3 deploy/verify-backup.py /duong/dan/thu-muc-backup
+```
 
 Các backup chứa dữ liệu riêng tư và hash mật khẩu. Giới hạn quyền thư mục, mã hóa bản sao trước khi đưa tới kho ngoài VPS, đặt chính sách giữ nhiều phiên bản, và lưu `.env`/thông tin phục hồi ở kho bí mật riêng. Không chỉ giữ bản sao trên cùng VPS. Script chưa tự gửi backup ra ngoài hoặc đặt lịch; quản trị viên có thể cấu hình cron/systemd theo lịch phù hợp sau khi thử thành công.
 
@@ -250,7 +260,7 @@ Các backup chứa dữ liệu riêng tư và hash mật khẩu. Giới hạn qu
 SMEE_RESTORE_CONFIRM=ERASE_CURRENT_DATA bash deploy/restore.sh /duong/dan/tuyet/doi/thu-muc-backup
 ```
 
-Script kiểm tra checksum, định dạng và đường dẫn archive; dừng app; phục hồi PostgreSQL bằng transaction; thay tệp; thu hồi toàn bộ session/link đặt mật khẩu rồi khởi động app. Nếu có lỗi sau khi dừng, app giữ trạng thái dừng để tránh sử dụng dữ liệu không hoàn chỉnh. Sau phục hồi, đăng nhập lại và kiểm tra khách hàng, phân quyền, tệp đính kèm.
+Script kiểm tra checksum, archive tệp và khả năng đọc dump trước khi dừng app. Sau đó script phục hồi PostgreSQL bằng transaction, thay tệp và đối chiếu kích thước cùng SHA-256 của từng tài liệu với bản ghi PostgreSQL. Khi kiểm tra đạt, script thu hồi toàn bộ session/link đặt mật khẩu và chờ app báo khỏe. Nếu lỗi trong lúc thay dữ liệu, kiểm tra tài liệu hoặc thu hồi phiên, app giữ trạng thái dừng để người vận hành kiểm tra. Sau phục hồi, đăng nhập lại và kiểm tra khách hàng, phân quyền, tệp đính kèm.
 
 **Không chạy `docker compose down -v`** trên môi trường có dữ liệu cần giữ; `-v` xóa volume. Cập nhật image hoặc `docker compose up` thông thường không xóa volume.
 
@@ -282,6 +292,7 @@ Kiểm thử và build:
 ```bash
 npm test
 npm run test:security
+python3 tests/test_backup_verification.py
 npm run typecheck
 npm run build
 ```

@@ -15,6 +15,7 @@ run([
   resolve(root,'node_modules/typescript/bin/tsc'),
   '--target','ES2022','--module','NodeNext','--moduleResolution','NodeNext',
   '--outDir',output,'--skipLibCheck','--esModuleInterop',
-  'tests/crm-engine.test.ts','tests/crm-access.test.ts','lib/crm-engine.ts','lib/crm-types.ts',
+  'tests/crm-engine.test.ts','tests/crm-access.test.ts','tests/sales-forecast.test.ts','tests/follow-up-agenda.test.ts','tests/owner-priorities.test.ts',
+  'lib/crm-engine.ts','lib/crm-types.ts',
 ]);
-run(['--test',resolve(output,'tests/crm-engine.test.js'),resolve(output,'tests/crm-access.test.js')]);
+run(['--test',...['crm-engine','crm-access','sales-forecast','follow-up-agenda','owner-priorities'].map(name=>resolve(output,'tests',name+'.test.js'))]);

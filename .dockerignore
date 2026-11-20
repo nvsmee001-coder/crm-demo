@@ -18,6 +18,8 @@ outputs
 work
 coverage
 *.tsbuildinfo
+__pycache__
+*.py[cod]
 *.log
 *.zip
 *.tar.gz

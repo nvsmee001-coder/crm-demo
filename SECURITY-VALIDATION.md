@@ -1,6 +1,52 @@
 # SMEE CRM VPS — báo cáo bàn giao và kiểm thử
 
-Ngày bàn giao: **18/11/2026**. Phiên bản mã nguồn: **1.0.0**.
+## Kiểm tra bản tích hợp ngày 20/11/2026
+
+Đã ghép bản SMEE-CRM-Admin vào source hiện có, giữ cấu hình Nginx ở cổng
+loopback 3180, `.env.example`, quy tắc Git bỏ qua dữ liệu riêng và bản sửa
+CLI tạo owner. Package/lockfile và bốn migration SQL hiện hữu không thay
+đổi. Việc kiểm tra dùng dữ liệu giả, không kết nối database hoặc thay đổi VPS.
+
+| Hạng mục | Kết quả kiểm tra lại |
+|---|---|
+| Nghiệp vụ CRM, phân quyền, lịch và dự báo | 63/63 đạt |
+| Excel | 9/9 đạt |
+| Crypto, HTTP, scanner protocol và cấu hình deployment | 15/15 đạt |
+| Lưu dữ liệu, tự khai thác, nhập Excel và sổ thu tiền | 15/15 đạt với PGlite trong RAM |
+| Tài khoản/session và quyền Admin | 11/11 đạt với PGlite trong RAM |
+| API production | 21/21 tình huống đạt; bổ sung kiểm tra riêng tư khi nhân viên nhập Excel và quyền ghi/hủy phiếu thu |
+| Đối chiếu backup bằng Python | 6/6 đạt |
+| CLI kiểm tra tệp sau phục hồi | Đạt cả bộ rỗng, tệp đúng, tệp bị thiếu và sai checksum |
+| CLI tạo/reset owner | 6 tình huống đạt, gồm email mặc định và không lộ mật khẩu |
+| TypeScript và build standalone | Đạt trên Windows, Node.js 24.20.0 |
+| Edge headless | Đăng nhập, Admin, mở sổ/ghi thu/hủy phiếu và tải lại đạt ở desktop 1440 px; Admin ở 390 px không tràn trang; không có lỗi console |
+| Compose 5.5.0 | Parse cả cấu hình gốc và Nginx; Nginx chỉ mở 127.0.0.1:3180; log rotation và các volume kế thừa đúng; preflight đạt |
+| Dependency audit | 0 cảnh báo khi quét lại lockfile ngày 20/11/2026 |
+
+HTTP/browser dùng server production local và PGlite, scanner trong API được
+mô phỏng. Các kiểm tra này không thay thế chạy Docker daemon, ClamAV thật,
+TLS công khai hoặc diễn tập backup/restore đầy đủ trên VPS. Giới hạn snapshot
+1.800.000 byte vẫn giữ nguyên; dữ liệu cũ chưa có sổ thu tiền chỉ được tính
+sau khi chủ sở hữu chủ động đối chiếu và mở sổ.
+
+## Xác minh vận hành ngày 19/11/2026
+
+| Hạng mục | Kết quả trên máy Windows |
+|---|---|
+| Kiểm tra cấu hình VPS | 3 bài test đạt, gồm trường hợp tên miền Caddy lệch với URL của ứng dụng |
+| Bản dựng và giao diện | Build standalone và TypeScript đạt. Trên Edge ở độ rộng 1440 và 390 px, đã mở đúng hồ sơ qua bộ lọc ưu tiên, ghi thu một phần, hủy phiếu và đối chiếu số dư cùng lịch sử sau khi tải lại |
+| Phân quyền và API | 19/19 kịch bản HTTP qua server production và PGlite độc lập. Đã kiểm tra phản hồi 304 rỗng khi nhân viên đọc lại, đọc khách theo danh tính, cập nhật sau chuyển giao và từ chối phiên bị thu hồi |
+| Dữ liệu và xác thực | Hai bộ kiểm thử tích hợp dùng PGlite trong bộ nhớ, gồm lưu và đọc lại phiếu, xử lý xung đột phiên bản, quyền quản lý, chi phí và quyền nhân viên. Cả hai bộ đạt |
+| Mã JavaScript của trang CRM | Tệp riêng của trang chính trong `.next/static/chunks/app/page-*.js` giảm từ 249.380 xuống 85.282 byte trước nén. Thư viện dùng chung và các màn hình nạp theo nhu cầu được tính riêng |
+| Kiểm tra bộ sao lưu | 6 bài test đạt với dữ liệu tạm, gồm archive rỗng, archive hợp lệ, thiếu checksum, sai dump, sai tên, trùng mục và gzip bị cắt ngắn |
+| Kiểm tra tệp sau khôi phục | CLI đọc đúng bộ rỗng và tệp nguyên vẹn, trả lỗi khi thiếu tệp hoặc sai SHA-256. Bốn tình huống chạy với PGlite trong bộ nhớ và thư mục riêng |
+| Script triển khai | Bash đọc thành công cú pháp của entrypoint, backup và restore |
+
+Chưa chạy Docker Compose, ClamAV thật, cấp chứng chỉ cho tên miền và diễn tập phục hồi toàn bộ trên VPS ở đợt cập nhật này. Quy trình kiểm tra máy chủ đích nằm trong [README-VPS.md](README-VPS.md).
+
+## Báo cáo của bản nguồn ngày 18/11/2026
+
+Các kết quả dưới đây thuộc phiên bản **1.0.0** ở lần bàn giao trước.
 
 ## Kết quả bàn giao
 

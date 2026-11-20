@@ -4,6 +4,7 @@ import { pool, withTransaction } from './database';
 import type { AccessAccount, AccessCommand, AccessContext, AccessResponse, CRMIdentity, Workspace } from './crm-types';
 import { CRMError } from './crm-engine';
 import { createWorkspace } from './crm-seed';
+import type { AdminDashboard, AdminEvent } from './admin-types';
 export type { AccessContext, CRMIdentity } from './crm-types';
 
 type Control = {id:string;owner_id:string;owner_email:string;owner_name:string;revision:number;mutation_id:string;updated_at:string};
@@ -43,7 +44,7 @@ async function ownerControl(identity:CRMIdentity, client:PoolClient):Promise<Con
 async function accessInTransaction(identity:CRMIdentity,client:PoolClient):Promise<AccessContext> {
   check(identity?.userId && identity.email,'Vui lòng đăng nhập.',401);
   const control=await ownerControl(identity,client);
-  const base={userId:identity.userId,name:identity.displayName,email:identity.email,ownerId:control.owner_id,ownerEmail:control.owner_email,ownerName:control.owner_name};
+  const base={userId:identity.userId,name:identity.displayName,email:identity.email,ownerId:control.owner_id,ownerEmail:control.owner_email,ownerName:control.owner_name,controlRevision:control.revision};
   if (identity.userId===control.owner_id) return {...base,role:'owner'};
   let account=(await client.query<AccountRow>('SELECT * FROM crm_access_accounts WHERE bound_user_id=$1 FOR UPDATE',[identity.userId])).rows[0];
   if (!account) account=(await client.query<AccountRow>('SELECT * FROM crm_access_accounts WHERE email=$1 FOR UPDATE',[cleanEmail(identity.email)])).rows[0];
@@ -54,10 +55,14 @@ async function accessInTransaction(identity:CRMIdentity,client:PoolClient):Promi
     await client.query('INSERT INTO crm_access_audit (id,actor_id,actor_email,action,target_id,details,at) VALUES ($1,$2,$3,$4,$5,$6,$7)',[randomUUID(),identity.userId,identity.email,'bind_account',account.id,JSON.stringify({email:account.email}),new Date().toISOString()]);
   }
   check(account.active===1 && account.bound_user_id===identity.userId && roles.has(account.role),'Không thể liên kết danh tính này với tài khoản nhân viên.',403);
-  const live=(await client.query<Stored>("SELECT * FROM crm_workspaces WHERE id='smee:live'")).rows[0];
-  check(live && live.owner_id===control.owner_id,'Không gian làm việc chưa sẵn sàng.',403);
-  const full=JSON.parse(live.data) as Workspace;
-  check(full.team.some(member=>member.id===account.team_member_id),'Nhân sự liên kết không còn trong công ty.',403);
+  const live=(await client.query<{linked:boolean}>(`
+    SELECT EXISTS (
+      SELECT 1 FROM jsonb_array_elements(w.data::jsonb->'team') member WHERE member->>'id'=$2
+    ) AS linked
+    FROM crm_workspaces w WHERE w.id='smee:live' AND w.owner_id=$1
+  `,[control.owner_id,account.team_member_id])).rows[0];
+  check(live,'Không gian làm việc chưa sẵn sàng.',403);
+  check(live.linked,'Nhân sự liên kết không còn trong công ty.',403);
   return {...base,role:account.role,memberId:account.team_member_id,accountId:account.id,accountVersion:account.version};
 }
 
@@ -71,8 +76,7 @@ export async function requireBusinessManager(identity:CRMIdentity,client?:PoolCl
   const access=await getAccess(identity,client); check(access.role==='owner' || access.role==='manager','Chức năng này chỉ dành cho chủ sở hữu hoặc quản lý.',403); return access;
 }
 
-async function responseInTransaction(identity:CRMIdentity,client:PoolClient):Promise<AccessResponse> {
-  const access=await getAccess(identity,client);
+async function responseInTransaction(access:AccessContext,client:PoolClient):Promise<AccessResponse> {
   const result:AccessResponse={viewer:{role:access.role,memberId:access.memberId,name:access.name,email:access.email},owner:{email:access.ownerEmail,name:access.ownerName}};
   if (access.role==='owner') {
     const control=(await client.query<{revision:number}>("SELECT revision FROM crm_access_control WHERE id='company'")).rows[0];
@@ -82,7 +86,46 @@ async function responseInTransaction(identity:CRMIdentity,client:PoolClient):Pro
   return result;
 }
 export async function getAccessResponse(identity:CRMIdentity):Promise<AccessResponse> {
-  return withTransaction(client=>responseInTransaction(identity,client));
+  return withTransaction(async client=>responseInTransaction(await getAccess(identity,client),client));
+}
+
+export async function getAdminDashboard(identity: CRMIdentity): Promise<AdminDashboard> {
+  return withTransaction(async client => {
+    const owner = await requireOwner(identity, client);
+    const access = await responseInTransaction(owner, client);
+    const { data } = await liveWorkspace(owner, client);
+    // Never send raw event details, credentials, or setup links to the browser.
+    const result = await client.query<Omit<AdminEvent, 'at'> & { at: Date }>(`
+      WITH recent_access AS (
+        SELECT id, actor_email, target_id, action, details::jsonb AS detail, at
+        FROM crm_access_audit ORDER BY at DESC, id DESC LIMIT 40
+      ), recent_auth AS (
+        SELECT id, actor_id, user_id, event, created_at
+        FROM auth_security_events ORDER BY created_at DESC, id DESC LIMIT 40
+      )
+      SELECT 'access-' || a.id AS id, a.at::timestamptz AS at,
+        CASE WHEN a.action = 'set_status' THEN
+            CASE WHEN a.detail->'after'->>'active' = 'true' THEN 'account_enabled' ELSE 'account_disabled' END
+          WHEN a.action = 'upsert' AND a.detail->'before' = 'null'::jsonb THEN 'account_created'
+          ELSE a.action END AS action,
+        a.actor_email AS actor,
+        COALESCE(a.detail->'after'->>'email', a.detail->>'email', account.email, '') AS subject
+      FROM recent_access a LEFT JOIN crm_access_accounts account ON account.id = a.target_id
+      UNION ALL
+      SELECT 'auth-' || e.id::text, e.created_at, e.event, COALESCE(actor.email, ''),
+        COALESCE(target_user.email, target_account.email, '')
+      FROM recent_auth e LEFT JOIN auth_users actor ON actor.id = e.actor_id
+        LEFT JOIN auth_users target_user ON target_user.id = e.user_id
+        LEFT JOIN crm_access_accounts target_account ON target_account.id = e.user_id
+      ORDER BY at DESC, id DESC LIMIT 40
+    `);
+    return {
+      companyName: data.settings.companyName,
+      access,
+      team: data.team,
+      events: result.rows.map(row => ({ ...row, at: row.at.toISOString() })),
+    };
+  });
 }
 
 async function liveWorkspace(access:AccessContext,client:PoolClient):Promise<{data:Workspace;revision:number}> {
@@ -137,7 +180,7 @@ export async function mutateAccess(identity:CRMIdentity,command:AccessCommand):P
       const updated=await client.query("UPDATE crm_access_control SET revision=revision+1,mutation_id=$1,updated_at=$2 WHERE id='company' AND revision=$3 AND owner_id=$4",[randomUUID(),now,command.expectedRevision,access.ownerId]);
       check(updated.rowCount===1,'Danh sách tài khoản đã thay đổi. Hãy tải lại.',409);
       await client.query('INSERT INTO crm_access_audit (id,actor_id,actor_email,action,target_id,details,at) VALUES ($1,$2,$3,$4,$5,$6,$7)',[randomUUID(),identity.userId,identity.email,command.action,id,JSON.stringify({before:existing?publicAccount(existing):null,after:next}),now]);
-      return responseInTransaction(identity,client);
+      return responseInTransaction(access,client);
     });
   } catch (error) {
     if (error instanceof CRMError) throw error;

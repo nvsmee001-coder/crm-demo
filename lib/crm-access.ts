@@ -1,5 +1,6 @@
 import type { AccessContext, Command, Customer, Workspace } from './crm-types.js';
-import { CRMError } from './crm-engine.js';
+import { CRMError, prospectFields, requireProspectMember } from './crm-engine.js';
+import { isCollectionAction } from './project-collections.js';
 
 const staffRoles=new Set(['account','telesales']);
 function denied():never{throw new CRMError('Bạn không có quyền thực hiện thao tác này.',403);}
@@ -8,8 +9,20 @@ export function canReadCustomer(customer:Customer,access:AccessContext):boolean{
   if(!access.memberId)return false;
   return access.role==='telesales'?customer.telesalesOwner===access.memberId:access.role==='account' && customer.owner===access.memberId;
 }
-const editableCustomerFields=new Set(['name','industry','contact','email','phone','jobTitle','address','website','background','notes','status','favorite','tags','additionalPhones','additionalEmails','socialLinks','nextFollowUp','nextAction']);
+const editableCustomerFields=new Set([...prospectFields,'jobTitle','address','website','background','favorite','tags','additionalPhones','additionalEmails','socialLinks']);
 export function authorizeCommand(full:Workspace,command:Command,access:AccessContext):void{
+  if(isCollectionAction(command.action) && access.role!=='owner')denied();
+  if(access.role==='manager' && command.action==='update' && command.collection==='projects' && command.data && 'budget' in command.data) {
+    const project=full.projects.find(record=>record.id===command.id);
+    if(project?.ledger && command.data.budget !== project.budget)denied();
+  }
+  if(command.action==='create_prospect' || command.action==='import_prospects'){
+    requireProspectMember(full,access);
+    if(command.id!==undefined || command.collection!==undefined)denied();
+    const keys=Object.keys(command.data || {});
+    if(command.action==='create_prospect'?keys.some(key=>!prospectFields.has(key)):keys.some(key=>key!=='sourceFile' && key!=='rows'))denied();
+    return;
+  }
   if(access.role==='owner' || access.role==='manager')return;
   if(!staffRoles.has(access.role) || !access.memberId)denied();
   const customer=full.customers.find(row=>row.id===command.id);

@@ -4,6 +4,8 @@ CRM tiếng Việt với nhận diện đỏ/trắng, quản lý khách hàng, t
 
 ## Đọc trước khi cài
 
+[Bản bàn giao cho chủ doanh nghiệp](BAN-GIAO-CRM.md) ghi các thiếu sót đã sửa, cách kiểm tra doanh thu hợp đồng và tiền thực thu, cùng phạm vi đã thử trước khi đưa lên tên miền.
+
 - **[README-VPS.md](README-VPS.md):** cài Docker, cấu hình VPS, trỏ domain, HTTPS, tạo chủ sở hữu, sao lưu và khôi phục.
 - **[SECURITY-VALIDATION.md](SECURITY-VALIDATION.md):** kết quả kiểm thử và giới hạn của bản bàn giao.
 - **[README-SMEE.md](README-SMEE.md):** hướng dẫn dùng CRM và phạm vi phân quyền.

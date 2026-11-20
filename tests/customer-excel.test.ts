@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
+import { readFile } from 'node:fs/promises';
+import { prospectExcelFields, PROSPECT_TEMPLATE_URL } from '../lib/customer-excel.js';
 import { createCustomerTemplate, guessCustomerColumns, mapCustomerExcelRows, readCustomerExcel, CUSTOMER_EXCEL_MAX_BYTES } from '../lib/customer-excel.js';
 
 async function fileFrom(workbook:ExcelJS.Workbook,name='khach-hang.xlsx') {
@@ -81,4 +83,34 @@ test('template is a real red-white workbook with phone text formatting and expli
   assert.equal(book.worksheets[0].getColumn(2).numFmt,'@');
   assert.equal((book.worksheets[0].getCell('A1').fill as ExcelJS.FillPattern).fgColor?.argb,'FFE92B22');
   assert.equal(result.sheets[1].name,'Hướng dẫn');
+});
+
+test('staff template starts empty and supports all fields, text phones and Excel follow-up dates', async()=>{
+  const blob=await readFile('public'+PROSPECT_TEMPLATE_URL);
+  const workbook=new ExcelJS.Workbook();
+  await workbook.xlsx.load(new Uint8Array(blob).buffer);
+  const sheet=workbook.getWorksheet('Khách hàng')!;
+  assert.equal(sheet.getCell('B2').numFmt,'@');
+  assert.equal(sheet.getCell('K2').numFmt,'dd/mm/yyyy');
+  assert.equal(sheet.getCell('H2').dataValidation.type,'list');
+  assert.equal(sheet.getCell('I501').dataValidation.type,'list');
+  const input=await readCustomerExcel(await fileFrom(workbook));
+  assert.equal(input.sheets[0].rows.length,0);
+  const mapping=guessCustomerColumns(input.sheets[0].headers,prospectExcelFields);
+  assert.deepEqual(Object.values(mapping),Array.from({length:11},(_,i)=>i));
+  sheet.getCell('A2').value='Khách thử';
+  sheet.getCell('B2').value='0912345678';
+  sheet.getCell('H2').value='Đang tư vấn';
+  sheet.getCell('I2').value='Cao';
+  sheet.getCell('K2').value=new Date('2026-12-01T00:00:00Z');
+  sheet.getCell('A3').value='Khách tiếp theo';
+  sheet.getCell('K3').value='2/12/2026';
+  const filled=await readCustomerExcel(await fileFrom(workbook));
+  const rows=mapCustomerExcelRows(filled.sheets[0],mapping,prospectExcelFields);
+  assert.equal(rows[0].rowNumber,2);
+  assert.equal(rows[0].data.phone,'0912345678');
+  assert.equal(rows[0].data.status,'Đang tư vấn');
+  assert.equal(rows[0].data.priority,'Cao');
+  assert.equal(rows[0].data.nextFollowUp,'2026-12-01');
+  assert.equal(rows[1].data.nextFollowUp,'2026-12-02');
 });

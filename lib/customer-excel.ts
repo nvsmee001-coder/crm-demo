@@ -1,4 +1,4 @@
-/** Browser-side XLSX decoding. File contents stay local until valid rows are confirmed. */
+/** Decode XLSX in the browser. Only mapped customer fields are sent for staff preflight. */
 import type { CellValue } from 'exceljs';
 
 export const CUSTOMER_EXCEL_MAX_BYTES = 5 * 1024 * 1024;
@@ -11,19 +11,31 @@ export type CustomerExcelRow = { rowNumber: number; cells: string[]; numericColu
 export type CustomerExcelSheet = { name: string; headers: string[]; rows: CustomerExcelRow[] };
 export type CustomerExcelWorkbook = { sheets: CustomerExcelSheet[] };
 export type CustomerColumnMapping = Record<string, number>;
-export const CUSTOMER_EXCEL_FIELDS = [
+const contactColumns = [
   {key:'name',label:'Tên khách hàng',required:true},
   {key:'phone',label:'Số điện thoại',required:true},
   {key:'contact',label:'Người liên hệ'},
   {key:'email',label:'Email'},
   {key:'industry',label:'Ngành nghề'},
   {key:'source',label:'Nguồn khách'},
+] as const;
+export const CUSTOMER_EXCEL_FIELDS = [
+  ...contactColumns,
   {key:'notes',label:'Ghi chú'},
   {key:'address',label:'Địa chỉ'},
   {key:'website',label:'Website'},
   {key:'jobTitle',label:'Chức danh'},
 ] as const;
-const fieldKeys = new Set<string>(CUSTOMER_EXCEL_FIELDS.map(field => field.key));
+export type CustomerExcelField = { key: string; label: string; required?: boolean };
+export const PROSPECT_TEMPLATE_URL = '/templates/SMEE-mau-khach-khai-thac.xlsx';
+export const prospectExcelFields: readonly CustomerExcelField[] = [
+  ...contactColumns,
+  {key:'notes',label:'Nhu cầu / Ghi chú'},
+  {key:'status',label:'Trạng thái'},
+  {key:'priority',label:'Mức ưu tiên'},
+  {key:'nextAction',label:'Việc tiếp theo'},
+  {key:'nextFollowUp',label:'Ngày chăm sóc tiếp theo'},
+];
 const folded = (text:string) => text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/gi,'d').toLowerCase().replace(/[^a-z0-9]/g,'');
 
 /** Check directory sizes before handing an archive to the workbook decoder. */
@@ -132,11 +144,15 @@ const aliases:Record<string,string[]> = {
   address:['diachi','address'],
   website:['website','trangweb','web'],
   jobTitle:['chucdanh','chucvu','chucdanhnguoilienhe','jobtitle','position'],
+  status:['trangthai','trangthaikhachhang','status'],
+  priority:['mucuutien','uutien','priority'],
+  nextAction:['viectieptheo','buoctieptheo','hanhdongtieptheo','nextaction'],
+  nextFollowUp:['ngaychamsoctieptheo','ngaychamsoc','ngayhen','lichhen','ngaylienhetiep','nextfollowup'],
 };
-export function guessCustomerColumns(headers:string[]):CustomerColumnMapping {
+export function guessCustomerColumns(headers:string[], fields:readonly CustomerExcelField[]=CUSTOMER_EXCEL_FIELDS):CustomerColumnMapping {
   const result:CustomerColumnMapping = {};
   const used = new Set<number>();
-  for (const field of CUSTOMER_EXCEL_FIELDS) {
+  for (const field of fields) {
     const names = aliases[field.key].map(folded);
     const index = headers.findIndex((header,index) => !used.has(index) && names.includes(folded(header)));
     result[field.key] = index;
@@ -145,8 +161,9 @@ export function guessCustomerColumns(headers:string[]):CustomerColumnMapping {
   return result;
 }
 
-export function mapCustomerExcelRows(sheet:CustomerExcelSheet,mapping:CustomerColumnMapping):{rowNumber:number;data:Record<string,unknown>}[] {
+export function mapCustomerExcelRows(sheet:CustomerExcelSheet,mapping:CustomerColumnMapping,fields:readonly CustomerExcelField[]=CUSTOMER_EXCEL_FIELDS):{rowNumber:number;data:Record<string,unknown>}[] {
   const used = new Set<number>();
+  const fieldKeys = new Set(fields.map(field => field.key));
   for (const [key,index] of Object.entries(mapping)) {
     if (!fieldKeys.has(key)) continue;
     if (index === -1) continue;
@@ -157,11 +174,15 @@ export function mapCustomerExcelRows(sheet:CustomerExcelSheet,mapping:CustomerCo
   if (!(mapping.name >= 0) || !(mapping.phone >= 0)) throw new Error('Hãy chọn cột Tên khách hàng và Số điện thoại.');
   return sheet.rows.map(row => {
     const data:Record<string,unknown> = {};
-    for (const field of CUSTOMER_EXCEL_FIELDS) {
+    for (const field of fields) {
       const index = mapping[field.key];
       if (index === undefined || index < 0) continue;
       let value = (row.cells[index] || '').trim();
       if (field.key === 'phone' && row.numericColumns?.includes(index) && /^[35789]\d{8}$/.test(value)) value = '0' + value;
+      if (field.key === 'nextFollowUp') {
+        const parts = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
+        if (parts) value = parts[3]+'-'+parts[2].padStart(2,'0')+'-'+parts[1].padStart(2,'0');
+      }
       data[field.key] = value;
     }
     return {rowNumber:row.rowNumber,data};

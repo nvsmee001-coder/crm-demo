@@ -1,5 +1,6 @@
-import type { Activity, Collection, Command, Customer, CustomerAction, CustomerNote, CustomerInteraction, Project, Workspace } from './crm-types.js';
+import type { AccessViewer, Activity, Collection, Command, Customer, CustomerAction, CustomerNote, CustomerInteraction, Project, Workspace } from './crm-types.js';
 import { CONTENT_STATUSES, CUSTOMER_STATUSES, CONTACT_CHANNELS, CALL_OUTCOMES, DEAL_PROBABILITIES, PROJECT_STATUSES, STAGES, TASK_STATUSES } from './crm-types.js';
+import { collected, isCollectionAction } from './project-collections.js';
 
 export class CRMError extends Error {
   status: number;
@@ -21,7 +22,7 @@ function find<T extends { id: string }>(rows: T[], id: unknown, label: string): 
 function owner(w: Workspace, name: unknown) { text(name, 'Người phụ trách'); check(w.team.some(p => p.name === name || p.id === name), 'Người phụ trách chưa có trong danh sách nhân sự.'); }
 function project(w: Workspace, id: unknown, writable = false) { const p = find(w.projects, id, 'Dự án'); if (writable) check(p.status !== 'Hoàn tất', 'Dự án đã hoàn tất.'); return p; }
 function ownerName(w:Workspace,value:string) {return w.team.find(member=>member.id===value || member.name===value)?.name || value;}
-function ownerId(w:Workspace,value:unknown) {owner(w,value);return w.team.find(member=>member.id===value || member.name===value)!.id;}
+function ownerId(w:Workspace,value:unknown) {owner(w,value);return (w.team.find(member=>member.id===value) || w.team.find(member=>member.name===value))!.id;}
 
 /** Compatibility projection only: archived change requests and approval metadata survive. */
 export function normalizeWorkspace(current:Workspace):Workspace {
@@ -145,6 +146,46 @@ function defaults(c: Collection, now: string): Record<string, unknown> {
   }; return base[c];
 }
 export interface CustomerImportPreviewRow { rowNumber:number;status:'ready'|'duplicate'|'invalid';message:string;customer:Record<string,unknown> }
+export const prospectFields = new Set(['name','contact','phone','email','industry','source','priority','status','notes','nextAction','nextFollowUp']);
+type ProspectViewer = Pick<AccessViewer,'role'|'memberId'>;
+export function requireProspectMember(workspace:Workspace,viewer?:ProspectViewer):string {
+  if (!viewer?.memberId || !['account','telesales'].includes(viewer.role) || !workspace.team.some(member=>member.id===viewer.memberId)) {
+    throw new CRMError('Tài khoản không có quyền thêm khách tự khai thác.',403);
+  }
+  return viewer.memberId;
+}
+function assignProspect(row:Row,memberId:string,isTelesales:boolean,now:string) {
+  row.owner=memberId;
+  row.prospectedBy=memberId;
+  if(isTelesales) {
+    check(normalizePhone(row.phone),'Cần số điện thoại để thêm khách vào danh sách gọi.');
+    row.telesalesOwner=memberId;
+    row.telesalesStatus='Chờ gọi';
+    row.telesalesQueuedAt=now;
+  }
+}
+type ImportEntry = {rowNumber:number;data:Record<string,unknown>};
+function validateProspectEntries(input:unknown):asserts input is ImportEntry[] {
+  check(Array.isArray(input) && input.length>0 && input.length<=500,'Mỗi lần nhập từ 1 đến 500 khách hàng.');
+  const rowNumbers=new Set<number>();
+  for(const entry of input) {
+    check(entry && typeof entry==='object' && !Array.isArray(entry) && Number.isInteger(entry.rowNumber)
+      && entry.rowNumber>=1 && entry.rowNumber<=1048576 && !rowNumbers.has(entry.rowNumber),'Số dòng Excel không hợp lệ hoặc bị lặp.');
+    rowNumbers.add(entry.rowNumber);
+    check(entry.data && typeof entry.data==='object' && !Array.isArray(entry.data),'Dòng dữ liệu khách hàng không hợp lệ.');
+    if(Object.keys(entry).some(key=>key!=='rowNumber' && key!=='data') || Object.keys(entry.data).some(key=>!prospectFields.has(key))) {
+      throw new CRMError('Dòng Excel chứa trường ngoài phạm vi nhập khách tự khai thác.',403);
+    }
+  }
+}
+export function previewProspectImport(input:unknown,workspace:Workspace,viewer:ProspectViewer) {
+  const memberId=requireProspectMember(workspace,viewer);
+  validateProspectEntries(input);
+  return previewCustomerImport(input,workspace,memberId,'anonymous').map(row=>({
+    ...row,
+    customer:Object.fromEntries(Object.entries(row.customer).filter(([field])=>prospectFields.has(field))),
+  }));
+}
 const customerImportLimits:Record<string,number>={name:300,contact:200,phone:100,email:254,industry:200,source:200,notes:5000,address:500,website:1000,jobTitle:200,background:5000,status:80,priority:30,nextFollowUp:10,nextAction:1000};
 function importCustomer(w:Workspace,input:unknown,defaultOwner:string,id:string,now:string):Row {
   check(!!input && typeof input==='object' && !Array.isArray(input),'Dòng dữ liệu khách hàng không hợp lệ.');
@@ -161,12 +202,13 @@ function importCustomer(w:Workspace,input:unknown,defaultOwner:string,id:string,
   return row;
 }
 /** Pure preflight shared by the Excel preview and server. Only ready rows reserve contact keys. */
-export function previewCustomerImport(input:{rowNumber:number;data:Record<string,unknown>}[],workspace:Workspace,defaultOwner:string):CustomerImportPreviewRow[] {
+export function previewCustomerImport(input:ImportEntry[],workspace:Workspace,defaultOwner:string,existingContacts:'named'|'anonymous'='named'):CustomerImportPreviewRow[] {
   check(Array.isArray(input) && input.length<=500,'Mỗi lần nhập tối đa 500 khách hàng.');
   const phoneOwners=new Map<string,string>(),emailOwners=new Map<string,string>();
   for(const customer of workspace.customers){
-    for(const value of contactValues(customer as unknown as Row,'phone'))phoneOwners.set(value,`CRM: ${customer.name}`);
-    for(const value of contactValues(customer as unknown as Row,'email'))emailOwners.set(value,`CRM: ${customer.name}`);
+    const label=existingContacts==='named'?`CRM: ${customer.name}`:'hồ sơ đã có trong CRM';
+    for(const value of contactValues(customer as unknown as Row,'phone'))phoneOwners.set(value,label);
+    for(const value of contactValues(customer as unknown as Row,'email'))emailOwners.set(value,label);
   }
   return input.map((entry,index)=>{
     const rowNumber=Number.isInteger(entry?.rowNumber)&&entry.rowNumber>0?entry.rowNumber:index+2;
@@ -191,6 +233,72 @@ function recordLabel(row: Row) { return str(row.name) || str(row.title) || row.i
 function log(w: Workspace, actor: string, now: string, textValue: string, kind: string, entityId?: string, details?:Activity['details']) {
   const activity: Activity = {id:crypto.randomUUID(), text:textValue,time:now,actor,kind,entityId,details}; w.activities.unshift(activity);
 }
+
+function applyCollection(w: Workspace, command: Command, actor: string, now: string) {
+  const p = project(w, command.id);
+  const d = command.data || {};
+  const today = businessDate(now);
+  const action = command.action;
+  const ledger = p.ledger;
+  if (action === 'open_project_ledger' || action === 'set_payment_due') {
+    date(d.paymentDue, 'Hạn thanh toán', false);
+  }
+  if (action === 'open_project_ledger') {
+    check(!ledger, 'Dự án đã mở sổ thu tiền.');
+    check(Number.isSafeInteger(p.budget) && p.budget > 0, 'Cần nhập giá trị hợp đồng bằng số đồng nguyên dương trước khi mở sổ.');
+    const amount = d.openingAmount;
+    check(typeof amount === 'number' && Number.isSafeInteger(amount) && amount >= 0 && amount <= p.budget,
+      'Tổng đã thu khi mở sổ phải là số đồng nguyên từ 0 đến giá trị hợp đồng.');
+    p.ledger = {openedAt: now, openedBy: actor, paymentDue: str(d.paymentDue), receipts: []};
+    p.ledger.receipts.push({id: crypto.randomUUID(), kind: 'opening', amount, date: today, reference: '', createdAt: now, createdBy: actor});
+    log(w, actor, now, `Mở sổ thu tiền cho ${p.name}`, action, p.id, {openingAmount: {before: null, after: amount}});
+    return;
+  }
+  check(ledger, 'Hãy đối chiếu số đã thu và mở sổ cho dự án trước.');
+  if (action === 'set_payment_due') {
+    check(typeof d.paymentDue === 'string', 'Cần gửi hạn thanh toán hoặc để trống để xóa ngày hẹn.');
+    const due = str(d.paymentDue);
+    check(due !== ledger.paymentDue, 'Hạn thanh toán chưa thay đổi.');
+    const before = ledger.paymentDue;
+    ledger.paymentDue = due;
+    log(w, actor, now, `Cập nhật hạn thanh toán cho ${p.name}`, action, p.id, {paymentDue: {before, after: due}});
+    return;
+  }
+  if (action === 'record_project_receipt') {
+    const amount = d.amount;
+    check(typeof amount === 'number' && Number.isSafeInteger(amount) && amount > 0, 'Số tiền thu phải là số đồng nguyên dương.');
+    check(amount <= p.budget - collected(ledger), 'Số tiền thu vượt quá số còn phải thu.');
+    date(d.date, 'Ngày nhận tiền');
+    const paidOn = str(d.date);
+    check(paidOn >= businessDate(ledger.openedAt) && paidOn <= today, 'Ngày nhận tiền phải từ ngày mở sổ đến hôm nay.');
+    const reference = str(d.reference);
+    check(reference.length > 0 && reference.length <= 120, 'Nhập mã phiếu hoặc mã giao dịch tối đa 120 ký tự.');
+    check(!ledger.receipts.some(r => !r.voided && r.reference.toLowerCase() === reference.toLowerCase()), 'Mã chứng từ đã có trên dự án.');
+    const receipt = {id: crypto.randomUUID(), kind: 'payment' as const, amount, date: paidOn, reference, createdAt: now, createdBy: actor};
+    ledger.receipts.unshift(receipt);
+    log(w, actor, now, `Ghi thu ${p.name} · ${reference}`, action, p.id, {amount: {before: null, after: amount}});
+    return;
+  }
+  const receipt = find(ledger.receipts, d.receiptId, 'Phiếu thu');
+  check(!receipt.voided, 'Phiếu thu đã được hủy.');
+  const reason = str(d.reason);
+  check(reason.length > 0 && reason.length <= 500, 'Nhập lý do hủy phiếu tối đa 500 ký tự.');
+  if (receipt.kind === 'opening') {
+    const corrected = d.openingAmount;
+    const payments = collected(ledger) - receipt.amount;
+    check(typeof corrected === 'number' && Number.isSafeInteger(corrected) && corrected >= 0 && corrected + payments <= p.budget,
+      'Số đầu kỳ sau điều chỉnh phải là số đồng nguyên và tổng thu không được vượt giá trị hợp đồng.');
+    check(corrected !== receipt.amount, 'Số đầu kỳ chưa thay đổi.');
+    receipt.voided = {at: now, by: actor, reason};
+    ledger.receipts.unshift({id: crypto.randomUUID(), kind: 'opening', amount: corrected, date: receipt.date, reference: '', createdAt: now, createdBy: actor});
+    log(w, actor, now, `Điều chỉnh số đầu kỳ của ${p.name}`, action, p.id,
+      {openingAmount: {before: receipt.amount, after: corrected}, reason: {before: null, after: reason}});
+    return;
+  }
+  receipt.voided = {at: now, by: actor, reason};
+  log(w, actor, now, `Hủy phiếu thu ${p.name} · ${receipt.reference || 'Số dư mở sổ'}`, action, p.id,
+    {receiptId: {before: null, after: receipt.id}, reason: {before: null, after: reason}});
+}
 function checkComplete(w: Workspace, p: Project) {
   check(!w.tasks.some(t => t.projectId === p.id && t.status !== 'Hoàn tất'), 'Còn công việc chưa hoàn tất.');
   check(!w.contents.some(t => t.projectId === p.id && t.status !== 'Đã đăng'), 'Còn nội dung chưa đăng.');
@@ -204,21 +312,32 @@ function referenced(w: Workspace, c: Collection, r: Row) {
   return false;
 }
 
-export function applyCommand(current: Workspace, command: Command, actor: string, now = new Date().toISOString()): Workspace {
+export function applyCommand(current: Workspace, command: Command, actor: string, now = new Date().toISOString(), viewer?: Pick<AccessViewer,'role'|'memberId'>): Workspace {
   check(command && typeof command === 'object', 'Yêu cầu không hợp lệ.');
-  const w = normalizeWorkspace(current); const d = command.data || {}; const c = command.collection; const id = command.id;
+  const prospect=command.action==='create_prospect';
+  const w = normalizeWorkspace(current); const d = command.data || {}; const c = prospect?'customers':command.collection; const id = command.id;
   check(!['approve_content','request_changes','approve_change','reject_change'].includes(String(command.action)), 'Tính năng duyệt và phát sinh đã được gỡ bỏ.');
   check(typeof d === 'object' && !Array.isArray(d), 'Dữ liệu không hợp lệ.');
-  if(command.action==='import_customers'){
+  if (isCollectionAction(command.action)) {
+    if (viewer?.role !== 'owner') throw new CRMError('Chỉ chủ sở hữu được ghi sổ thu tiền.', 403);
+    applyCollection(w, command, actor, now);
+    return w;
+  }
+  if(command.action==='import_customers' || command.action==='import_prospects'){
     check(Array.isArray(d.rows) && d.rows.length>0 && d.rows.length<=500,'Mỗi lần nhập từ 1 đến 500 khách hàng.');
-    const importOwner=ownerId(w,d.owner);text(d.sourceFile,'Tên file nguồn');check(str(d.sourceFile).length<=255,'Tên file nguồn tối đa 255 ký tự.');
+    const staffImport=command.action==='import_prospects';
+    const importOwner=staffImport?requireProspectMember(w,viewer):ownerId(w,d.owner);
+    text(d.sourceFile,'Tên file nguồn');check(str(d.sourceFile).length<=255,'Tên file nguồn tối đa 255 ký tự.');
     check(w.customers.length+d.rows.length<=10000,'Đã đạt giới hạn bản ghi của không gian này.');
-    const preview=previewCustomerImport(d.rows.map((data,index)=>({rowNumber:index+2,data:data as Record<string,unknown>})),w,importOwner);
+    if(staffImport)validateProspectEntries(d.rows);
+    const entries=staffImport?d.rows as ImportEntry[]:d.rows.map((data,index)=>({rowNumber:index+2,data:data as Record<string,unknown>}));
+    const preview=previewCustomerImport(entries,w,importOwner,staffImport?'anonymous':'named');
     const problem=preview.find(row=>row.status!=='ready');check(!problem,problem?`Dòng ${problem.rowNumber}: ${problem.message}`:'Dữ liệu nhập không hợp lệ.');
     for(const item of preview){
       const row=importCustomer(w,item.customer,importOwner,crypto.randomUUID(),now);
-      checkCustomerDuplicates(w,row);w.customers.push(row as unknown as Customer);
-      log(w,actor,now,`Nhập khách hàng: ${row.name} · ${str(d.sourceFile)}`,'import_customers',row.id,{sourceFile:{before:null,after:str(d.sourceFile)}});
+      if(staffImport)assignProspect(row,importOwner,viewer?.role==='telesales',now);
+      w.customers.push(row as unknown as Customer);
+      log(w,actor,now,`Nhập khách hàng: ${row.name} · ${str(d.sourceFile)}`,command.action,row.id,{sourceFile:{before:null,after:str(d.sourceFile)}});
     }
     return w;
   }
@@ -250,13 +369,14 @@ export function applyCommand(current: Workspace, command: Command, actor: string
     }
     return w;
   }
-  if (['create','update','delete'].includes(command.action)) {
+  if (prospect || ['create','update','delete'].includes(command.action)) {
     check(c !== 'changes', 'Tính năng phát sinh đã được gỡ bỏ; dữ liệu cũ chỉ được lưu trữ.');
     check(c && collections.includes(c), 'Loại dữ liệu không hợp lệ.');
     const list = rows(w,c);
-    if (command.action === 'create') {
+    if (prospect || command.action === 'create') {
       check(list.length < 10000, 'Đã đạt giới hạn bản ghi của không gian này.');
       const r: Row = {id:crypto.randomUUID(),...defaults(c,now),...pick(c,d)};
+      if(prospect)assignProspect(r,requireProspectMember(w,viewer),viewer?.role==='telesales',now);
       if (c === 'projects') { check(r.status !== 'Hoàn tất', 'Hãy nghiệm thu để hoàn tất dự án.'); r.originalDueDate=r.dueDate; }
       if (c === 'deals') {
         check(r.stage !== 'Đã chốt', 'Hãy dùng thao tác Chốt cơ hội để tạo dự án.');
@@ -266,10 +386,13 @@ export function applyCommand(current: Workspace, command: Command, actor: string
       }
       if (['tasks','contents','issues'].includes(c)) project(w,r.projectId,true);
       if (c === 'customers') { normalizeCustomerInput(w,r); checkCustomerDuplicates(w,r,undefined); }
-      validate(w,c,r); list.push(r); log(w,actor,now,`Tạo ${recordLabel(r)}`,'create',r.id); return w;
+      validate(w,c,r); list.push(r);
+      log(w,actor,now,prospect?`Thêm khách tự khai thác: ${recordLabel(r)}`:`Tạo ${recordLabel(r)}`,command.action,r.id);
+      return w;
     }
     const r = find(list,id,'Bản ghi');
     if (command.action === 'delete') {
+      check(!(c === 'projects' && r.ledger), 'Không thể xóa dự án đã mở sổ thu tiền.');
       check(!referenced(w,c,r), 'Bản ghi đang được sử dụng; hãy xử lý các liên kết trước.');
       check(!(c === 'deals' && r.projectId), 'Không thể xóa cơ hội đã tạo dự án.');
       check(!(c === 'contents' && r.status === 'Đã đăng'), 'Không thể xóa nội dung đã đăng.');
@@ -291,6 +414,11 @@ export function applyCommand(current: Workspace, command: Command, actor: string
       if((update.stage??r.stage)==='Không thành công')update.probability=0;
     }
     if (c === 'projects') {
+      if (r.ledger && own(update, 'budget')) {
+        const ledger = project(w, id).ledger!;
+        check(typeof update.budget === 'number' && Number.isSafeInteger(update.budget) && update.budget >= collected(ledger),
+          'Giá trị hợp đồng phải là số đồng nguyên và ít nhất bằng số đã thu.');
+      }
       check(r.status !== 'Hoàn tất', 'Dự án đã hoàn tất.'); check(update.status !== 'Hoàn tất', 'Hãy dùng thao tác Nghiệm thu để hoàn tất.');
       for (const key of ['customerId','serviceId']) check(!own(update,key) || update[key]===r[key], 'Không thể đổi khách hàng hoặc dịch vụ của dự án đã tạo.');
       check(!own(update,'owner') || update.owner===r.owner, 'Đổi người phụ trách qua thao tác Bàn giao.');

@@ -9,7 +9,7 @@ Hướng dẫn cài máy chủ, tạo tài khoản chủ sở hữu và trỏ do
 1. Mở domain CRM tại `/login` và đăng nhập bằng email/mật khẩu riêng của CRM. Không có tài khoản mặc định hoặc đăng ký công khai.
 2. Chủ sở hữu có quyền toàn hệ thống. Nhân viên chỉ đăng nhập sau khi được cấp quyền, liên kết với nhân sự và đặt mật khẩu bằng link do chủ sở hữu tạo.
 3. **Dữ liệu mẫu** dành cho chủ sở hữu thử quy trình. Công ty, người liên hệ, email và số tiền ở đây đều giả lập. Số `+1 202-555-01xx` và email/website `example.com` là dữ liệu minh họa, không dùng để liên hệ thật.
-4. Chuyển sang **Dữ liệu công ty** trước khi nhập dữ liệu thật. Hai không gian lưu riêng; nhân viên chỉ được dùng dữ liệu công ty.
+4. Trình duyệt mới mở **Dữ liệu công ty**. CRM ghi nhớ lựa chọn của chủ sở hữu nếu đã chuyển sang **Dữ liệu mẫu**. Kiểm tra nhãn không gian trước khi nhập khách. Nhân viên làm việc trong dữ liệu công ty.
 5. Kiểm tra thông tin công ty, danh bạ, dịch vụ, giá và phạm vi bàn giao trong Cài đặt trước khi vận hành.
 
 ## Tài khoản và phân quyền
@@ -19,25 +19,36 @@ Danh bạ nhân sự dùng để phân công. Tài khoản đăng nhập là đ�
 | Vai trò | Dữ liệu và thao tác |
 |---|---|
 | Chủ sở hữu | Toàn bộ công ty, tài khoản, khóa/mở khóa quyền, tạo link mật khẩu, dữ liệu mẫu và xuất bản sao nghiệp vụ. |
-| Quản lý | Toàn bộ nghiệp vụ công ty: khách, cơ hội, dự án, phân công và tệp. Không quản trị tài khoản hoặc xuất snapshot đầy đủ. |
-| Account | Chỉ khách có account phụ trách là mình; xem cơ hội/lịch sử liên quan, cập nhật thông tin chăm sóc và công việc được phép. |
-| Telesales | Chỉ khách được giao cho mình ở trường telesales; cập nhật thông tin được phép, ghi kết quả gọi và hoạt động chăm sóc của mình. |
+| Quản lý | Quản lý khách, cơ hội, dự án, phân công và tệp. Được xem sổ thu tiền. Quyền ghi phiếu, sửa trị giá hợp đồng đã mở sổ, quản trị tài khoản và xuất bản sao JSON đầy đủ thuộc chủ sở hữu. |
+| Sale / Account | Thêm khách tự khai thác, cập nhật hồ sơ khách mình phụ trách và theo dõi lịch chăm sóc, công việc, cơ hội liên quan. |
+| Telesales | Thêm khách tự khai thác vào danh sách gọi của mình, cập nhật hồ sơ thuộc danh sách này và ghi kết quả chăm sóc. |
 
-Quyền được kiểm tra ở máy chủ cho từng yêu cầu. Nhân viên không tự đổi người phụ trách, tự chuyển khách, nhập khách hàng hàng loạt hoặc cấp quyền hệ thống. Dữ liệu dự án, nội dung và kho tài liệu toàn công ty không được gửi xuống tài khoản account/telesales.
+Quyền được kiểm tra ở máy chủ cho từng yêu cầu. Nhân viên chỉ nhập Excel cho khách tự khai thác của chính mình; không tự đổi người phụ trách, tự chuyển khách hoặc cấp quyền hệ thống. Dữ liệu dự án, nội dung và kho tài liệu toàn công ty không được gửi xuống tài khoản account/telesales.
 
 Để cấp tài khoản:
 
 1. Trong **Dữ liệu công ty → Cài đặt**, tạo nhân sự trong danh bạ.
-2. Tại **Tài khoản nhân viên**, chọn **Cấp quyền tài khoản**, điền email, nhân sự liên kết và role.
+2. Mở **Quản trị** ở thanh bên hoặc truy cập `/admin` bằng tài khoản chủ sở hữu. Trong mục **Tài khoản**, chọn **Cấp quyền tài khoản**, điền email, chọn nhân sự liên kết và vai trò. Trang quản trị luôn thao tác trên dữ liệu công ty, kể cả khi vừa xem không gian mẫu.
 3. Sau khi lưu, bấm **Đặt mật khẩu** để tạo link dùng một lần, hiệu lực **1 giờ**.
 4. Chuyển link qua kênh riêng đã xác minh với đúng nhân viên. App **không gửi email/SMTP tự động**.
 5. Nhân viên đặt mật khẩu, sau đó đăng nhập tại `/login`.
+
+Trên trang quản trị, chủ sở hữu có thể tìm theo tên, email hoặc vai trò, lọc theo trạng thái và xem lịch sử thay đổi quyền truy cập.
 
 Tạo link mới sẽ thay thế link chưa dùng trước đó. Hoàn tất đặt lại mật khẩu sẽ thu hồi các phiên đăng nhập cũ. Khóa tài khoản có hiệu lực ở các yêu cầu tiếp theo; chuyển khách sang người khác cập nhật ngay phạm vi được phép. Phiên đăng nhập có thời hạn 8 giờ.
 
 Nếu chủ sở hữu quên mật khẩu, quản trị viên có quyền SSH dùng `docker compose run --rm app npm run owner:reset` và nhập mật khẩu ẩn trên terminal. Không gửi mật khẩu trong tham số lệnh hoặc cuộc trò chuyện.
 
+## Lịch chăm sóc và dự báo bán hàng
+
+- **Lịch chăm sóc** tập hợp ngày liên hệ tiếp theo và các công việc đang chờ trong hồ sơ khách hàng. Mở một dòng để xem hồ sơ. Biểu tượng chuông trên màn hình quản lý mở ngay danh sách đến hạn. Có thể xuất các mục đang lọc thành tệp lịch `.ics`.
+- Trong **Báo cáo → Dự báo bán hàng**, chọn tháng này, quý này hoặc tất cả thời gian. Hệ thống cộng giá trị của từng cơ hội đang mở sau khi nhân với xác suất chốt. Cơ hội thắng hoặc thua được loại khỏi phép tính. Nhấn vào tên cơ hội để kiểm tra hoặc chỉnh sửa xác suất và ngày dự kiến chốt.
+
 ## Danh sách và hồ sơ khách hàng
+
+Trên màn hình nhân viên có quyền **Sale / Account** hoặc **Telesales**, bấm **Thêm khách tự khai thác** để nhập thông tin liên hệ, nguồn khách và nhu cầu. Có thể ghi ngay việc tiếp theo và ngày chăm sóc để theo dõi trong lịch cá nhân. Khi lưu, CRM tự gán khách cho người vừa thêm và mở hồ sơ mới. Với Telesales, nhập thêm số điện thoại để khách vào danh sách gọi của bạn với trạng thái **Chờ gọi**.
+
+Chọn bộ lọc **Tự khai thác** để xem các khách bạn đã tìm và đang phụ trách. Với khách tự khai thác hoặc được giao, mở hồ sơ rồi chọn **Cập nhật hồ sơ** để sửa thông tin, trạng thái, mức ưu tiên hoặc lịch hẹn.
 
 Tìm kiếm/lọc theo trạng thái, account, telesales, nguồn, mức ưu tiên, lịch chăm sóc và nhãn. Các nhóm quá hẹn/hôm nay/chưa hẹn giúp chọn khách cần xử lý trước. Có thể chọn cả danh sách theo bộ lọc để thao tác hàng loạt trong giới hạn được hiển thị.
 
@@ -55,7 +66,16 @@ Lịch chăm sóc chung và các công việc/cuộc hẹn có lịch riêng; kh
 
 ## Nhập khách hàng từ Excel
 
-Vào **Khách hàng → Nhập Excel**:
+### Sale / Account và Telesales
+
+1. Trong **Hồ sơ khách hàng**, bấm **Nhập Excel** rồi tải mẫu. Điền mỗi khách một dòng trong trang **Khách hàng**. Tên và số điện thoại là bắt buộc. Có thể nhập thêm nguồn, nhu cầu, trạng thái, mức ưu tiên, việc tiếp theo và ngày chăm sóc. Trang **Hướng dẫn** có ví dụ cho từng cột.
+2. Chọn tệp `.xlsx` tối đa **5 MB**, với tối đa **500 khách trên một trang tính**. Kiểm tra tên cột được ghép tự động. Giữ số điện thoại ở định dạng văn bản để bảo toàn số 0 ở đầu.
+3. Bấm kiểm tra để xem các dòng hợp lệ, bị trùng hoặc cần sửa. Máy chủ đối chiếu các cột đã ghép với dữ liệu công ty. Chọn các dòng hợp lệ cần nhập và xác nhận lưu.
+4. Mở bộ lọc **Tự khai thác** để xem khách vừa nhập. Người nhập tự động phụ trách các hồ sơ này. Khách của Telesales cũng xuất hiện trong danh sách **Chờ gọi**.
+
+### Chủ sở hữu và quản lý
+
+Mở **Khách hàng → Nhập Excel**.
 
 1. Chọn/kéo thả file `.xlsx`; tối đa **5 MB**, **500 dòng dữ liệu mỗi sheet**. File `.xls` cần lưu lại thành `.xlsx` trước.
 2. Chọn sheet và account phụ trách. Kiểm tra các cột nhận diện tự động; tên khách và số điện thoại là bắt buộc.
@@ -101,13 +121,27 @@ Mở liên kết gọi không tự tăng số lần gọi; chỉ ghi nhận khi 
 - **Nội dung:** Ý tưởng → Đang sản xuất → Sẵn sàng đăng → Đã đăng. Không có quy trình duyệt hoặc tạo yêu cầu phát sinh.
 - **Báo cáo:** tổng hợp bản ghi trong không gian đang mở; cần nhập đúng giờ công và chi phí để đánh giá hiệu quả.
 
+## Tổng quan dành cho chủ doanh nghiệp
+
+Trong **Tổng quan → Hồ sơ cần rà soát**, chọn một người phụ trách hoặc một lý do để xem khách quá hẹn, khách thiếu lịch và cơ hội quá ngày dự kiến chốt hoặc thiếu bước tiếp theo. Bấm vào tên để mở hồ sơ và cập nhật. Một khách có nhiều lịch trễ xuất hiện một lần với lịch trễ nhất. Danh sách ưu tiên dùng ngày giờ Việt Nam.
+
+Biểu đồ **Nhịp độ kinh doanh** gom dự án theo tháng bắt đầu. Tổng ở đầu biểu đồ và sáu điểm trên biểu đồ dùng cùng khoảng thời gian. Số tiền ở đây là giá trị hợp đồng. Xem tiền đã nhận trong **Thu tiền & công nợ**.
+
+## Thu tiền và đối chiếu hợp đồng
+
+1. Vào **Thu tiền & công nợ**, lọc **Chưa đối chiếu** và mở một hợp đồng.
+2. Chọn **Mở sổ thu tiền**. Đối chiếu chứng từ, nhập số tiền thực tế đã nhận trước đó (có thể bằng 0) và hạn thanh toán phần còn lại nếu đã thỏa thuận. CRM chỉ tổng hợp các hợp đồng đã mở sổ.
+3. Khi nhận thêm tiền, chọn **Ghi phiếu thu**, nhập số tiền, ngày nhận cùng mã phiếu hoặc mã giao dịch. Số còn phải thu bằng giá trị hợp đồng trừ số đầu kỳ và các phiếu còn hiệu lực.
+4. Chủ sở hữu có thể hủy một phiếu hoặc điều chỉnh số đầu kỳ, kèm lý do. Mở lại lịch sử hợp đồng để xem người và thời điểm điều chỉnh. **Quá hạn thanh toán** chỉ tính phần còn nợ đã có hạn trước hôm nay. **Còn nợ chưa có hạn** giúp rà các hợp đồng còn thiếu ngày hẹn.
+5. Vào **Báo cáo → Xuất báo cáo dự án** để tải CSV có giá trị hợp đồng, tiền đã thu, số còn phải thu và hạn thanh toán. Hợp đồng chưa đối chiếu có nhãn riêng và để trống các cột tiền thu/nợ.
+
 ## Tệp và dữ liệu
 
 Chủ sở hữu/quản lý tải tệp tối đa **10 MB**. Máy chủ kiểm tra định dạng thật, quét ClamAV và lưu riêng; scanner chưa sẵn sàng thì tệp chưa được lưu. Account/telesales chỉ đọc ảnh hồ sơ đang gắn với khách thuộc phạm vi được phép, không mở kho tệp tùy ý.
 
 CSV khách hàng chứa dữ liệu người xuất được phép xem. Endpoint JSON `/api/export?mode=live` dành cho chủ sở hữu, xuất nghiệp vụ của không gian cùng revision; **không thay thế backup đầy đủ** vì không gồm toàn bộ bảng tài khoản và byte tệp.
 
-Mỗi không gian đang lưu theo snapshot JSON, giới hạn **1.800.000 byte (khoảng 1,8 MB)** gồm bản ghi và lịch sử. Tệp upload lưu riêng và không tính vào giới hạn snapshot. Khi vượt ngưỡng, máy chủ từ chối lần ghi mới và giữ dữ liệu cũ. Muốn mở rộng quy mô cần thiết kế các bảng khách/hoạt động riêng và thử tải, không chỉ tăng giới hạn.
+Mỗi không gian đang lưu theo snapshot JSON, giới hạn **1.800.000 byte (1,8 MB)** gồm bản ghi và lịch sử. Chủ sở hữu xem dung lượng tại **Cài đặt → Dữ liệu & kết nối**. Từ 80%, CRM hiển thị cảnh báo. Tệp đính kèm dùng bộ nhớ riêng. Lần ghi vượt giới hạn sẽ bị từ chối. Với khối lượng lớn, cần tách dữ liệu thành các bảng nghiệp vụ và thử tải trước khi mở rộng.
 
 Dùng `deploy/backup.sh` và đọc phần khôi phục trong README-VPS để giữ đủ database và tệp. Database mới độc lập; gói source không tự nhập dữ liệu công ty đã có ở hệ thống khác.
 

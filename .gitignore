@@ -8,6 +8,8 @@ node_modules/
 coverage/
 .test-output/
 *.tsbuildinfo
+__pycache__/
+*.py[cod]
 
 # Local configuration and private keys
 .env

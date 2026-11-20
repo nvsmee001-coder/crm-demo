@@ -1,0 +1,43 @@
+.employee-prospect-entry { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.employee-prospect-entry > button { white-space: nowrap; }
+.employee-queue .employee-queue-tabs.with-prospects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-radius: 10px; }
+.employee-queue-tabs.with-prospects > button { min-width: 0; }
+.employee-prospect-editor {
+  position: fixed; inset: 0; margin: auto; width: min(610px, calc(100vw - 24px)); padding: 0;
+  border: 1px solid var(--border); border-radius: 18px; color: var(--ink); background: #fff;
+  max-height: calc(100dvh - 32px); box-shadow: 0 26px 90px #20202838;
+}
+.employee-prospect-editor[open] { display: flex; flex-direction: column; }
+.employee-prospect-editor::backdrop { background: #25252b65; backdrop-filter: blur(4px); }
+.employee-prospect-editor header, .employee-prospect-editor footer { flex: none; padding: 14px 22px; }
+.employee-prospect-editor header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+.employee-prospect-editor h2 { font-size: 1.24rem; font-weight: 700; color: var(--ink); }
+.employee-prospect-editor form { display: flex; flex-direction: column; overflow: hidden; }
+.prospect-fields { padding: 18px 22px; overflow-y: auto; overscroll-behavior: contain; }
+.prospect-fields fieldset { border: 0; min-width: 0; }
+.prospect-fields fieldset + fieldset { margin-top: 20px; }
+.prospect-fields legend { margin-bottom: 11px; font-size: .9rem; font-weight: 700; }
+.prospect-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px 15px; }
+.prospect-grid label { display: grid; gap: 5px; font-size: .78rem; font-weight: 550; }
+.prospect-grid .wide { grid-column: 1 / -1; }
+.prospect-grid select, .prospect-grid textarea, .prospect-grid input {
+  width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid #d9d9df; border-radius: 8px;
+  background: #fff; font: inherit; font-weight: 400; font-size: .86rem; color: var(--ink);
+}
+.prospect-grid input:focus-visible, .prospect-grid textarea:focus-visible, .prospect-grid select:focus-visible {
+  outline: 2px solid var(--brand-strong); outline-offset: 1px;
+}
+.prospect-grid textarea { resize: vertical; }
+.employee-prospect-editor footer { border-top: 1px solid var(--border); }
+.employee-prospect-editor footer > div { display: flex; justify-content: flex-end; gap: 8px; }
+.employee-prospect-editor footer p { margin-bottom: 8px; }
+@media (max-width: 720px) {
+  .employee-welcome:has(.employee-prospect-entry) { flex-wrap: wrap; }
+  .employee-prospect-entry { flex-wrap: wrap; }
+}
+@media (max-width: 480px) {
+  .employee-prospect-editor { max-height: calc(100dvh - 16px); }
+  .prospect-grid { grid-template-columns: 1fr; }
+  .employee-prospect-editor header, .employee-prospect-editor footer, .prospect-fields { padding: 12px 16px; }
+  .prospect-grid input, .prospect-grid textarea, .prospect-grid select { font-size: 16px; }
+}

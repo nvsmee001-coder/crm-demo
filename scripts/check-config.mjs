@@ -11,6 +11,9 @@ export function validateDeploymentEnvironment(env) {
       ['localhost','127.0.0.1','[::1]'].includes(origin.hostname) || /(^|\.)example\.(com|net|org)$/.test(origin.hostname)) {
     fail('APP_ORIGIN must be your real HTTPS origin without path or trailing slash.');
   }
+  if (!env.APP_DOMAIN || origin.port || origin.hostname !== env.APP_DOMAIN.toLowerCase()) {
+    fail('APP_DOMAIN must match the HTTPS hostname in APP_ORIGIN, using public HTTPS port 443.');
+  }
   const email = (env.SMEE_OWNER_EMAIL || '').trim();
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || /@example\.(com|net|org)$/i.test(email)) {
     fail('Set SMEE_OWNER_EMAIL to the actual owner login email.');
@@ -28,7 +31,7 @@ export function validateDeploymentEnvironment(env) {
   if (env.CLAMAV_REQUIRED !== 'true' || !env.CLAMAV_HOST || /\s/.test(env.CLAMAV_HOST)) fail('Production requires CLAMAV_REQUIRED=true and a valid CLAMAV_HOST.');
   const port = Number(env.CLAMAV_PORT || 3310);
   if (!Number.isInteger(port) || port < 1 || port > 65535) fail('CLAMAV_PORT must be a valid TCP port.');
-  if (env.TRUST_PROXY !== 'true') fail('The Docker deployment requires TRUST_PROXY=true behind the supplied Caddy proxy.');
+  if (env.TRUST_PROXY !== 'true') fail('The Docker deployment requires TRUST_PROXY=true behind a trusted reverse proxy.');
   return true;
 }
 
