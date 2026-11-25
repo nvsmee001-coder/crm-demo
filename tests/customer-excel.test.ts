@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { readFile } from 'node:fs/promises';
 import { prospectExcelFields, PROSPECT_TEMPLATE_URL } from '../lib/customer-excel.js';
 import { createCustomerTemplate, guessCustomerColumns, mapCustomerExcelRows, readCustomerExcel, CUSTOMER_EXCEL_MAX_BYTES } from '../lib/customer-excel.js';
@@ -46,9 +47,82 @@ test('column guessing handles Vietnamese accents/punctuation and mapping uses in
   assert.throws(()=>mapCustomerExcelRows(sheet,{name:0,phone:-1}),/Tên khách hàng và Số điện thoại/);
 });
 
-test('formula cells are rejected with actionable paste-values guidance',async()=>{
-  const book=workbookWith([['Tên khách hàng','SĐT'],['A',{formula:'"0912345678"',result:'0912345678'}]]);
-  await assert.rejects(()=>fileFrom(book).then(readCustomerExcel),/công thức.*Dán giá trị/);
+test('cached formula values import as data and issues only affect rows with mapped cells',async()=>{
+  const book=workbookWith([
+    ['Tên khách hàng','SĐT','Ghi chú','Cột nội bộ'],
+    ['Có kết quả',{formula:'912345678',result:912345678},{formula:'"Đã lưu"',result:'Đã lưu'},{error:'#N/A'}],
+    ['Thiếu kết quả',{formula:'A1'}],
+    ['Lỗi Excel',{error:'#REF!'}],
+    ['Giá trị thường','0987654321'],
+    [null,null,null,{error:'#N/A'}],
+    ['Giá trị 0','0912345677',{formula:'0',result:0}],
+    ['Giá trị false','0912345676',{formula:'FALSE',result:false}],
+  ]);
+  const {sheets:[sheet]}=await readCustomerExcel(await fileFrom(book));
+  const rows=mapCustomerExcelRows(sheet,guessCustomerColumns(sheet.headers));
+  assert.deepEqual(rows.map(row=>row.rowNumber),[2,3,4,5,7,8]);
+  assert.equal(rows[0].data.phone,'0912345678');
+  assert.equal(rows[0].data.notes,'Đã lưu');
+  assert.equal(rows[0].issue,undefined);
+  assert.match(rows[1].issue??'',/B3.*công thức.*Dán giá trị/);
+  assert.match(rows[2].issue??'',/B4.*lỗi Excel/);
+  assert.equal(rows[3].issue,undefined);
+  assert.equal(rows[4].data.notes,'0');
+  assert.equal(rows[5].data.notes,'Không');
+  assert.match(mapCustomerExcelRows(sheet,{name:0,phone:1,notes:3})[0].issue??'',/D2.*lỗi Excel/);
+});
+
+test('recognizes a customer header below the report title and keeps the original Excel row numbers',async()=>{
+  const book=workbookWith([
+    ['Danh sách khách hàng tháng này'],
+    [],
+    ['STT','Tên doanh nghiệp','ĐT','Ghi chú'],
+    [1,'Khách A','0912345678','Đã liên hệ'],
+  ]);
+  const {sheets:[sheet]}=await readCustomerExcel(await fileFrom(book));
+  const mapping=guessCustomerColumns(sheet.headers);
+  assert.equal(mapping.name,1);
+  assert.equal(mapping.phone,2);
+  const rows=mapCustomerExcelRows(sheet,mapping);
+  assert.equal(rows.length,1);
+  assert.equal(rows[0].rowNumber,4);
+  assert.equal(rows[0].data.name,'Khách A');
+});
+
+test('prefixed spreadsheet parts and package-absolute sheet paths preserve all 147 customer rows',async()=>{
+  const book=workbookWith([
+    ['Tên khách hàng','SĐT','Ghi chú'],
+    ...Array.from({length:147},(_,index)=>[
+      `Khách ${index+1} & <Mẫu>`,
+      '090812'+String(index).padStart(4,'0'),
+      index===146?'Dòng cuối':'',
+    ]),
+  ]);
+  book.addWorksheet('Hướng dẫn').addRows([['Hướng dẫn'],['Nội dung minh họa']]);
+  const source=await fileFrom(book);
+  const zip=await JSZip.loadAsync(await source.arrayBuffer());
+  const namespace='http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  for (const name of ['xl/workbook.xml','xl/styles.xml','xl/sharedStrings.xml','xl/worksheets/sheet1.xml','xl/worksheets/sheet2.xml']) {
+    const xml=await zip.file(name)!.async('string');
+    zip.file(name,xml.replace(`xmlns="${namespace}"`,`xmlns:x="${namespace}"`)
+      .replace(/<(\/?)([A-Za-z][\w.-]*)(?=[\s/>])/g,'<$1x:$2')
+      .replaceAll('xmlns:r=','xmlns:rel=').replaceAll(' r:id=',' rel:id='));
+  }
+  const relationships='xl/_rels/workbook.xml.rels';
+  const relationXml=await zip.file(relationships)!.async('string');
+  zip.file(relationships,relationXml.replace(/Target="(worksheets\/[^"]+)"/g,'Target="/xl/$1"'));
+  const file=new File([await zip.generateAsync({type:'arraybuffer'})],'prefixed.xlsx');
+  const {sheets,skippedSheets}=await readCustomerExcel(file);
+  assert.deepEqual(skippedSheets,[]);
+  assert.equal(sheets.length,2);
+  const customerSheet=sheets[0];
+  const rows=mapCustomerExcelRows(customerSheet,guessCustomerColumns(customerSheet.headers));
+  assert.equal(rows.length,147);
+  assert.equal(rows[0].rowNumber,2);
+  assert.equal(rows[0].data.name,'Khách 1 & <Mẫu>');
+  assert.equal(rows[146].rowNumber,148);
+  assert.equal(rows[146].data.notes,'Dòng cuối');
+  assert.equal(sheets[1].rows.length,1);
 });
 
 test('limits reject 501 populated rows and data outside 30 columns',async()=>{
@@ -57,6 +131,10 @@ test('limits reject 501 populated rows and data outside 30 columns',async()=>{
   const wide=workbookWith([['Tên khách hàng','SĐT'],['A','0912345678']]);
   wide.worksheets[0].getCell('AE2').value='Ngoài giới hạn';
   await assert.rejects(()=>fileFrom(wide).then(readCustomerExcel),/30 cột/);
+  wide.addWorksheet('Khách khác').addRows([['Tên khách hàng','SĐT'],['Khách B','0912345678']]);
+  const {sheets,skippedSheets}=await readCustomerExcel(await fileFrom(wide));
+  assert.deepEqual(sheets.map(sheet=>sheet.name),['Khách khác']);
+  assert.match(skippedSheets[0],/Khách hàng.*30 cột/);
 });
 
 test('invalid archives, legacy files and oversized files fail before workbook decoding',async()=>{

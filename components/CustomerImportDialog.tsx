@@ -41,6 +41,7 @@ export default function CustomerImportDialog({data, revision, busy, staffRole, s
   const usePreview=!!staffRole||serverPreview;
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [sheets, setSheets] = useState<CustomerExcelSheet[]>([]);
+  const [skippedSheets, setSkippedSheets] = useState<string[]>([]);
   const [sheetIndex, setSheetIndex] = useState(0);
   const [mapping, setMapping] = useState<Record<string, number>>({});
   const [owner, setOwner] = useState(data.team[0]?.id || '');
@@ -98,13 +99,16 @@ export default function CustomerImportDialog({data, revision, busy, staffRole, s
     return new Set(columns).size !== columns.length ? 'Một cột Excel chỉ được ghép với một trường thông tin.' : '';
   }, [sheet, staffRole, owner, mapping]);
   const mapped = useMemo(() => sheet && !mappingError ? mapCustomerExcelRows(sheet, mapping, fields) : [], [sheet, mapping, fields, mappingError]);
+  const previewInput = useMemo(() => mapped.filter(row=>!row.issue), [mapped]);
+  const fileIssues = useMemo(() => mapped.flatMap(({rowNumber,data,issue}):CustomerImportPreviewRow[] =>
+    issue ? [{rowNumber,customer:data,status:'invalid',message:issue}] : []), [mapped]);
   const retrySelection = useRef<{input: typeof mapped; included: Set<number>} | null>(null);
   const local = useMemo(() => {
-    if (usePreview || !mapped.length) return {rows: [], error: ''};
-    try { return {rows: previewCustomerImport(mapped, data, owner), error: ''}; }
+    if (usePreview || !previewInput.length) return {rows: [], error: ''};
+    try { return {rows: previewCustomerImport(previewInput, data, owner), error: ''}; }
     catch (reason) { return {rows: [], error: reason instanceof Error ? reason.message : 'Không kiểm tra được dữ liệu.'}; }
-  }, [mapped, data, owner, usePreview]);
-  const rows = usePreview ? remote?.rows || [] : local.rows;
+  }, [previewInput, data, owner, usePreview]);
+  const rows = [...(usePreview ? remote?.rows || [] : local.rows),...fileIssues].sort((a,b)=>a.rowNumber-b.rowNumber);
   const ready = rows.filter(row => row.status === 'ready');
   const duplicateCount = rows.filter(row => row.status === 'duplicate').length;
   const invalidCount = rows.length - ready.length - duplicateCount;
@@ -115,11 +119,15 @@ export default function CustomerImportDialog({data, revision, busy, staffRole, s
   async function chooseFile(file?: File) {
     if (!file || locked || running.current) return;
     running.current = true;
-    setProcessing(true); setError(''); setSheets([]); setRemote(null); setMapping({}); setSkipRejected(false);
+    setProcessing(true); setError(''); setSheets([]); setSkippedSheets([]); setRemote(null); setMapping({}); setSkipRejected(false);
     try {
       const workbook = await readCustomerExcel(file);
-      setSheets(workbook.sheets); setSheetIndex(0);
-      setMapping(guessCustomerColumns(workbook.sheets[0].headers, fields));
+      const mappings=workbook.sheets.map(item=>guessCustomerColumns(item.headers,fields));
+      const identified=(map:Record<string,number>)=>map.name>=0 && map.phone>=0;
+      const populated=mappings.findIndex((map,index)=>identified(map) && workbook.sheets[index].rows.length>0);
+      const initial=populated>=0 ? populated : Math.max(0,mappings.findIndex(identified));
+      setSheets(workbook.sheets); setSkippedSheets(workbook.skippedSheets); setSheetIndex(initial);
+      setMapping(mappings[initial]);
       setFilename(file.name); setStep(2);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Không đọc được file Excel.');
@@ -138,11 +146,12 @@ export default function CustomerImportDialog({data, revision, busy, staffRole, s
     if (locked || running.current || mappingError || !mapped.length) return;
     setError(''); setRowFilter('all');
     if (!usePreview) { previewRevision.current=revision; setStep(3); return; }
+    if (!previewInput.length) { setRemote({rows:[],revision}); setSelected(new Set()); setStep(3); return; }
     running.current = true;
     setProcessing(true); setRemote(null);
     try {
       const response = await fetch('/api/crm/import-preview', {
-        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rows:mapped,...(serverPreview&&!staffRole?{owner}:{})}),
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({rows:previewInput,...(serverPreview&&!staffRole?{owner}:{})}),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Không kiểm tra được dữ liệu.');
@@ -183,7 +192,7 @@ export default function CustomerImportDialog({data, revision, busy, staffRole, s
       if (staffRole && remote) {
         ok = await onMutate({
           action: 'import_prospects',
-          data: {sourceFile, rows: mapped.filter(row => selected.has(row.rowNumber))},
+          data: {sourceFile, rows: previewInput.filter(row => selected.has(row.rowNumber))},
         }, {...options,expectedRevision:remote.revision});
       } else {
         ok = await onMutate({action: 'import_customers', data: {rows: chosen.map(row => row.customer), owner, sourceFile}}, {...options,expectedRevision:remote?.revision??previewRevision.current});
@@ -246,19 +255,23 @@ export default function CustomerImportDialog({data, revision, busy, staffRole, s
                 <option value="">Chọn nhân viên</option>{data.team.map(member => <option value={member.id} key={member.id}>{member.name}</option>)}
               </select></label>}
           </div>
-          <div className="import-section-heading"><h3>Ghép cột Excel với thông tin CRM</h3><p>Kiểm tra các cột đã nhận diện. Bạn có thể chọn lại từng cột.</p></div>
+          <div className="import-section-heading"><h3>Ghép cột Excel với thông tin CRM</h3><p>Giá trị dưới mỗi cột là ví dụ để đối chiếu. Nút Kiểm tra sẽ hiển thị số dòng xử lý.</p></div>
           <div className="import-mapping">{fields.map(field => {
             const column = mapping[field.key] ?? -1;
             const required = 'required' in field && field.required;
+            const example = column < 0 ? undefined : sheet.rows.find(row=>row.cells[column]);
             return <label key={field.key}><span>{field.label}{required && <b> *</b>}</span>
               <select aria-label={'Cột ' + field.label} value={column} disabled={locked} onChange={event => { setMapping({...mapping, [field.key]: Number(event.target.value)}); setSkipRejected(false); }}>
                 <option value={-1}>{required ? 'Chọn cột bắt buộc' : 'Không nhập trường này'}</option>
                 {sheet.headers.map((heading, index) => <option key={index} value={index}>{heading || 'Cột ' + (index + 1)} · cột {index + 1}</option>)}
-              </select>{column >= 0 && <small>Giá trị mẫu · {sheet.rows[0]?.cells[column] || 'Trống'}</small>}
+              </select>{column >= 0 && <small>{example ? `Ví dụ ở dòng ${example.rowNumber} · ${example.cells[column]}` : 'Cột này chưa có giá trị mẫu'}</small>}
             </label>;
           })}</div>
           <p className="import-help">CRM chuẩn hóa số điện thoại để nhận ra các dạng 0…, 84… và +84… của cùng một số.</p>
+          {skippedSheets.length > 0 && <div className="import-warning"><AlertCircle size={16}/><ul>{skippedSheets.map(message=><li key={message}>{message}</li>)}</ul></div>}
           {mappingError && <div className="import-warning"><AlertCircle size={16}/>{mappingError}</div>}
+          {!sheet.rows.length && <div className="import-warning"><AlertCircle size={16}/>Sheet này chỉ có hàng tiêu đề. Hãy chọn sheet có khách hàng hoặc điền dữ liệu vào file rồi chọn lại.</div>}
+          {sheet.rows.length>0 && !mappingError && !mapped.length && <div className="import-warning"><AlertCircle size={16}/>Các cột đã ghép chưa có dữ liệu. Hãy kiểm tra lại sheet và cột đã chọn.</div>}
         </>}
         {step === 3 && <>
           <div className="import-file-summary"><FileSpreadsheet size={20}/><div><strong>{filename}</strong>
@@ -295,8 +308,8 @@ export default function CustomerImportDialog({data, revision, busy, staffRole, s
             {!staffRole && <button className="btn primary" onClick={() => onImported(saved.phones, true,saved.ids)}>Phân chia telesales<ArrowRight size={15}/></button>}
           </> : <>
             <button className="btn" disabled={locked} onClick={() => { setStep(step === 3 ? 2 : 1); setError(''); }}><ArrowLeft size={14}/>Quay lại</button>
-            {step === 2 ? <button className="btn primary" disabled={locked || !!mappingError || !sheet?.rows.length} onClick={() => void checkRows()}>
-              {processing ? 'Đang kiểm tra…' : 'Kiểm tra ' + (sheet?.rows.length || 0) + ' dòng'}<ArrowRight size={15}/>
+            {step === 2 ? <button className="btn primary" disabled={locked || !!mappingError || !mapped.length} onClick={() => void checkRows()}>
+              {processing ? 'Đang kiểm tra…' : 'Kiểm tra ' + mapped.length + ' dòng'}<ArrowRight size={15}/>
             </button> : <button className="btn primary" disabled={locked || !chosen.length || !!local.error || (!staffRole && rejected > 0 && !skipRejected)} onClick={() => void submit()}>
               {locked ? 'Đang nhập…' : 'Nhập ' + chosen.length + (staffRole ? ' khách hàng' : ' khách hàng hợp lệ')}<Check size={15}/>
             </button>}

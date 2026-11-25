@@ -92,7 +92,7 @@ Mở **Khách hàng → Nhập Excel**.
 
 Kiểm tra trùng áp dụng cho số điện thoại/email trong file và CRM, kể cả liên hệ bổ sung. Số điện thoại được chuẩn hóa để nhận ra dạng `0…`, `84…`, `+84…`; một số ô di động kiểu số bị Excel bỏ số 0 đầu được khôi phục khi nhận diện được. Luôn xem cột kết quả chuẩn hóa trước khi nhập.
 
-File được đọc trong trình duyệt, không thực thi công thức. Chỉ bản ghi đã xác nhận được gửi lên API, nơi máy chủ tiếp tục kiểm tra dữ liệu, quyền và revision. File mẫu được tải bằng nút **Tải mẫu Excel**; xóa các dòng ví dụ trước khi điền dữ liệu thật.
+Trình duyệt đọc file và dùng kết quả công thức đã được Excel lưu. API nhận các cột đã ghép để kiểm tra trùng trước khi bạn xác nhận lưu. Ô công thức chưa có kết quả hoặc ô lỗi trong cột đã ghép được đánh dấu theo từng dòng. Nếu cần, dùng **Dán giá trị (Paste Values)** trong Excel rồi chọn lại file. Tải file mẫu bằng nút **Tải mẫu Excel** và xóa các dòng ví dụ trước khi điền dữ liệu thật.
 
 ## Phân chia khách cho đội telesales
 

@@ -1,16 +1,19 @@
 /** Decode XLSX in the browser. Only mapped customer fields are sent for staff preflight. */
-import type { CellValue } from 'exceljs';
+import type { Cell, CellValue } from 'exceljs';
+import { compatibleXlsx } from './xlsx-compat.js';
 
 export const CUSTOMER_EXCEL_MAX_BYTES = 5 * 1024 * 1024;
 export const CUSTOMER_EXCEL_MAX_ROWS = 500;
 const MAX_UNCOMPRESSED = 30 * 1024 * 1024;
 const MAX_COLUMNS = 30;
+const HEADER_SCAN_ROWS = 15;
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-export type CustomerExcelRow = { rowNumber: number; cells: string[]; numericColumns?: number[] };
+export type CustomerExcelRow = { rowNumber: number; cells: string[]; numericColumns?: number[]; cellIssues?: Record<number,string> };
 export type CustomerExcelSheet = { name: string; headers: string[]; rows: CustomerExcelRow[] };
-export type CustomerExcelWorkbook = { sheets: CustomerExcelSheet[] };
+export type CustomerExcelWorkbook = { sheets: CustomerExcelSheet[]; skippedSheets: string[] };
 export type CustomerColumnMapping = Record<string, number>;
+type MappedExcelRow = { rowNumber:number; data:Record<string,unknown>; issue?:string };
 const contactColumns = [
   {key:'name',label:'Tên khách hàng',required:true},
   {key:'phone',label:'Số điện thoại',required:true},
@@ -74,24 +77,34 @@ function preflightXlsx(buffer:ArrayBuffer):void {
   if (cursor !== end || !names.has('[Content_Types].xml') || !names.has('xl/workbook.xml')) throw invalid();
 }
 
-function cellText(value:CellValue, sheet:string, address:string):string {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value.trim();
+function readCell(cell:Cell, sheet:string):{text:string;numeric?:boolean;issue?:string} {
+  const issue=(message:string)=>({text:'',issue:`Ô ${sheet}!${cell.address} ${message}`});
+  let value:CellValue=cell.value;
+  if (value && typeof value === 'object' && ('formula' in value || 'sharedFormula' in value)) {
+    // The formula value snapshot omits falsy results such as 0 and false.
+    const cached=value.result ?? cell.result;
+    if (cached === undefined || cached === null) {
+      return issue('chứa công thức chưa có kết quả lưu. Hãy mở và lưu lại file trong Excel hoặc Dán giá trị (Paste Values).');
+    }
+    value = cached;
+  }
+  if (value === null || value === undefined) return {text:''};
+  if (typeof value === 'string') {
+    return value.length > 30000 ? issue('quá dài (tối đa 30.000 ký tự).') : {text:value.trim()};
+  }
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new Error(`Ô ${sheet}!${address} không phải số hợp lệ.`);
-    return String(value);
+    return Number.isFinite(value) ? {text:String(value),numeric:true} : issue('không phải số hợp lệ.');
   }
-  if (typeof value === 'boolean') return value ? 'Có' : 'Không';
+  if (typeof value === 'boolean') return {text:value ? 'Có' : 'Không'};
   if (value instanceof Date) {
-    if (!Number.isFinite(value.getTime())) throw new Error(`Ô ${sheet}!${address} chứa ngày không hợp lệ.`);
-    return value.toISOString().slice(0,10);
+    return Number.isFinite(value.getTime()) ? {text:value.toISOString().slice(0,10)} : issue('chứa ngày không hợp lệ.');
   }
-  if ('formula' in value || 'sharedFormula' in value) throw new Error(`Ô ${sheet}!${address} chứa công thức. Hãy sao chép và Dán giá trị (Paste Values) trước khi nhập.`);
-  if ('richText' in value) return value.richText.map(part => part.text).join('').trim();
-  if ('text' in value) return String(value.text || '').trim();
-  if ('error' in value) throw new Error(`Ô ${sheet}!${address} chứa lỗi Excel. Hãy sửa ô này trước khi nhập.`);
-  return '';
+  if ('error' in value) return issue('chứa lỗi Excel. Hãy sửa ô này trước khi nhập.');
+  const text = 'richText' in value ? value.richText.map(part => part.text).join('') : 'text' in value ? String(value.text || '') : '';
+  return text.length > 30000 ? issue('quá dài (tối đa 30.000 ký tự).') : {text:text.trim()};
 }
+
+class SheetLimitError extends Error {}
 
 export async function readCustomerExcel(file:File):Promise<CustomerExcelWorkbook> {
   if (!/\.xlsx$/i.test(file.name)) throw new Error(/\.xls$/i.test(file.name) ? 'File .xls chưa được hỗ trợ. Mở file bằng Excel và chọn Lưu thành .xlsx.' : 'Vui lòng chọn file Excel có đuôi .xlsx.');
@@ -102,40 +115,54 @@ export async function readCustomerExcel(file:File):Promise<CustomerExcelWorkbook
   preflightXlsx(buffer);
   const module = await import('exceljs');
   const workbook = new (module.Workbook || module.default.Workbook)();
-  try { await workbook.xlsx.load(buffer); }
+  try { await workbook.xlsx.load(await compatibleXlsx(buffer)); }
   catch { throw new Error('Không đọc được file Excel. Kiểm tra file không có mật khẩu và lưu lại dưới định dạng .xlsx.'); }
   const sheets:CustomerExcelSheet[] = [];
+  const skippedSheets:string[] = [];
   if (workbook.worksheets.length > 30) throw new Error('File có quá nhiều trang tính. Hãy giữ tối đa 30 trang tính cần nhập.');
   for (const worksheet of workbook.worksheets) {
     if (worksheet.state !== 'visible') continue;
-    const nonempty:{rowNumber:number;cells:string[];numericColumns:number[]}[] = [];
+    const nonempty:CustomerExcelRow[] = [];
     let width = 0;
-    worksheet.eachRow({includeEmpty:false}, row => {
-      const cells:string[] = [], numericColumns:number[] = [];
-      row.eachCell({includeEmpty:false}, (cell,column) => {
-        const text = cellText(cell.value,worksheet.name,cell.address);
-        if (!text) return;
-        if (column > MAX_COLUMNS) throw new Error(`Trang “${worksheet.name}” có dữ liệu ngoài 30 cột. Hãy giữ lại các cột khách hàng cần nhập.`);
-        if (text.length > 30000) throw new Error(`Ô ${worksheet.name}!${cell.address} quá dài (tối đa 30.000 ký tự).`);
-        width = Math.max(width,column);
-        cells[column - 1] = text;
-        if (typeof cell.value === 'number') numericColumns.push(column - 1);
+    const tooManyRows = () => new SheetLimitError(`Trang “${worksheet.name}” vượt quá 500 dòng dữ liệu. Hãy tách file và nhập từng phần.`);
+    try {
+      worksheet.eachRow({includeEmpty:false}, row => {
+        const cells:string[] = [], numericColumns:number[] = [];
+        const cellIssues:Record<number,string> = {};
+        row.eachCell({includeEmpty:false}, (cell,column) => {
+          const value = readCell(cell,worksheet.name);
+          if (!value.text && !value.issue) return;
+          if (column > MAX_COLUMNS) throw new SheetLimitError(`Trang “${worksheet.name}” có dữ liệu ngoài 30 cột. Hãy giữ lại các cột khách hàng cần nhập.`);
+          width = Math.max(width,column);
+          cells[column - 1] = value.text;
+          if (value.issue) cellIssues[column - 1] = value.issue;
+          if (value.numeric) numericColumns.push(column - 1);
+        });
+        if (cells.length) nonempty.push({rowNumber:row.number,cells,numericColumns,...(Object.keys(cellIssues).length ? {cellIssues} : {})});
+        if (nonempty.length > CUSTOMER_EXCEL_MAX_ROWS + HEADER_SCAN_ROWS) throw tooManyRows();
       });
-      if (cells.some(Boolean)) nonempty.push({rowNumber:row.number,cells,numericColumns});
-      if (nonempty.length > CUSTOMER_EXCEL_MAX_ROWS + 1) throw new Error(`Trang “${worksheet.name}” vượt quá 500 dòng dữ liệu. Hãy tách file và nhập từng phần.`);
-    });
-    if (!nonempty.length) continue;
-    const header = nonempty[0];
-    const headers = Array.from({length:width},(_,index) => header.cells[index] || `Cột ${index + 1}`);
-    sheets.push({name:worksheet.name,headers,rows:nonempty.slice(1).map(row => ({...row,cells:Array.from({length:width},(_,index) => row.cells[index] || '')}))});
+      if (!nonempty.length) continue;
+      const index = nonempty.slice(0,HEADER_SCAN_ROWS).findIndex(row => {
+        const mapping = guessCustomerColumns(Array.from(row.cells,cell=>cell ?? ''));
+        return mapping.name >= 0 && mapping.phone >= 0;
+      });
+      const headerIndex = Math.max(index,0);
+      const rows = nonempty.slice(headerIndex+1);
+      if (rows.length > CUSTOMER_EXCEL_MAX_ROWS) throw tooManyRows();
+      const headers = Array.from({length:width},(_,index) => nonempty[headerIndex].cells[index] || `Cột ${index + 1}`);
+      sheets.push({name:worksheet.name,headers,rows:rows.map(row=>({...row,cells:Array.from({length:width},(_,index)=>row.cells[index] || '')}))});
+    } catch (error) {
+      if (!(error instanceof SheetLimitError)) throw error;
+      skippedSheets.push(error.message);
+    }
   }
-  if (!sheets.length) throw new Error('File không có trang tính hiển thị chứa dữ liệu.');
-  return {sheets};
+  if (!sheets.length) throw new Error(skippedSheets[0] || 'File không có trang tính hiển thị chứa dữ liệu.');
+  return {sheets,skippedSheets};
 }
 
 const aliases:Record<string,string[]> = {
-  name:['tenkhachhang','tenkhach','khachhang','tencongty','congty','tencongtykhachhang','customername','companyname','company','name','hovaten','hoten'],
-  phone:['sodienthoai','dienthoai','dienthoaichinh','sodienthoaichinh','sdt','phone','phonenumber','mobile','tel'],
+  name:['tenkhachhang','tenkhach','khachhang','tencongty','congty','tencongtykhachhang','tendoanhnghiep','customername','companyname','company','name','hovaten','hoten','ten'],
+  phone:['sodienthoai','dienthoai','dienthoaichinh','sodienthoaichinh','sodienthoaikhachhang','sdt','sdtkhachhang','dt','phone','phonenumber','mobile','tel'],
   contact:['nguoilienhe','nguoilienhechinh','tennguoilienhe','contact','contactname'],
   email:['email','emailchinh','diachiemail','thu dientu'],
   industry:['nganh','nganhnghe','linhvuc','industry'],
@@ -161,7 +188,7 @@ export function guessCustomerColumns(headers:string[], fields:readonly CustomerE
   return result;
 }
 
-export function mapCustomerExcelRows(sheet:CustomerExcelSheet,mapping:CustomerColumnMapping,fields:readonly CustomerExcelField[]=CUSTOMER_EXCEL_FIELDS):{rowNumber:number;data:Record<string,unknown>}[] {
+export function mapCustomerExcelRows(sheet:CustomerExcelSheet,mapping:CustomerColumnMapping,fields:readonly CustomerExcelField[]=CUSTOMER_EXCEL_FIELDS):MappedExcelRow[] {
   const used = new Set<number>();
   const fieldKeys = new Set(fields.map(field => field.key));
   for (const [key,index] of Object.entries(mapping)) {
@@ -172,11 +199,14 @@ export function mapCustomerExcelRows(sheet:CustomerExcelSheet,mapping:CustomerCo
     used.add(index);
   }
   if (!(mapping.name >= 0) || !(mapping.phone >= 0)) throw new Error('Hãy chọn cột Tên khách hàng và Số điện thoại.');
-  return sheet.rows.map(row => {
+  const result:MappedExcelRow[] = [];
+  for (const row of sheet.rows) {
     const data:Record<string,unknown> = {};
+    let issue:string|undefined;
     for (const field of fields) {
       const index = mapping[field.key];
       if (index === undefined || index < 0) continue;
+      issue ??= row.cellIssues?.[index];
       let value = (row.cells[index] || '').trim();
       if (field.key === 'phone' && row.numericColumns?.includes(index) && /^[35789]\d{8}$/.test(value)) value = '0' + value;
       if (field.key === 'nextFollowUp') {
@@ -185,8 +215,9 @@ export function mapCustomerExcelRows(sheet:CustomerExcelSheet,mapping:CustomerCo
       }
       data[field.key] = value;
     }
-    return {rowNumber:row.rowNumber,data};
-  });
+    if (issue || Object.values(data).some(Boolean)) result.push({rowNumber:row.rowNumber,data,...(issue ? {issue} : {})});
+  }
+  return result;
 }
 
 export async function createCustomerTemplate():Promise<Blob> {
@@ -206,7 +237,7 @@ export async function createCustomerTemplate():Promise<Blob> {
   for (const rowNumber of [2,3]) {sheet.getRow(rowNumber).height=42;sheet.getRow(rowNumber).eachCell(cell=>{cell.font={name:'Arial',size:11,color:{argb:'FF52525B'}};cell.alignment={vertical:'middle',wrapText:true};cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:rowNumber===2?'FFFFF1F0':'FFFFFFFF'}};});}
   const guide = workbook.addWorksheet('Hướng dẫn');
   guide.getColumn(1).width = 110;
-  for (const text of ['HƯỚNG DẪN NHẬP KHÁCH HÀNG — SMEE CRM','1. Dùng trang Khách hàng. Xóa hai dòng mẫu và điền dữ liệu của công ty.','2. Bắt buộc có Tên khách hàng và Số điện thoại. Giữ số điện thoại ở định dạng Văn bản để không mất số 0 đầu.','3. Số 09…, +849… và 849… được chuẩn hóa để phát hiện trùng. Số trùng trong file hoặc CRM sẽ được báo ở màn hình xem trước.','4. Các cột khác không bắt buộc. Có thể ghép lại tên cột khi nhập.','5. Tối đa 500 dòng khách hàng và file 5 MB mỗi lần. Công thức phải được chuyển sang giá trị trước khi nhập.','6. Chỉ những dòng hợp lệ được chọn mới được nhập sau khi bạn xác nhận. Phân chia telesales là bước riêng sau khi nhập.']) guide.addRow([text]);
+  for (const text of ['HƯỚNG DẪN NHẬP KHÁCH HÀNG — SMEE CRM','1. Dùng trang Khách hàng. Xóa hai dòng mẫu và điền dữ liệu của công ty.','2. Bắt buộc có Tên khách hàng và Số điện thoại. Giữ số điện thoại ở định dạng Văn bản để không mất số 0 đầu.','3. Số 09…, +849… và 849… được chuẩn hóa để phát hiện trùng. Số trùng trong file hoặc CRM sẽ được báo ở màn hình xem trước.','4. Các cột khác không bắt buộc. Có thể ghép lại tên cột khi nhập.','5. Tối đa 500 dòng khách hàng và file 5 MB mỗi lần. Với công thức chưa có kết quả lưu, hãy Dán giá trị trước khi nhập.','6. Chỉ những dòng hợp lệ được chọn mới được nhập sau khi bạn xác nhận. Phân chia telesales là bước riêng sau khi nhập.']) guide.addRow([text]);
   guide.eachRow(row=>{row.height=34;row.alignment={wrapText:true,vertical:'middle'};row.font={name:'Arial',size:11};});
   guide.getRow(1).font={name:'Arial',bold:true,color:{argb:'FFB71F1A'},size:14};
   const buffer = await workbook.xlsx.writeBuffer();
